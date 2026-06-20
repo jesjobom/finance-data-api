@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-06-16
+goal: Build a simple, reliable API to store portfolio, operations, news,
+  watchlist assets, virtual portfolios, and benchmarks, exposing deterministic
+  queries for the finance agent without embedding investment intelligence.

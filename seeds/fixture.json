@@ -1,0 +1,40 @@
+{
+  "investments": [
+    {
+      "symbol": "AAPL",
+      "name": "Apple Inc.",
+      "assetClass": "stock",
+      "currency": "USD",
+      "market": "NASDAQ",
+      "country": "US",
+      "broker": "example-broker"
+    },
+    {
+      "symbol": "HGLG11",
+      "name": "CSHG Logistica FII",
+      "assetClass": "fii",
+      "currency": "BRL",
+      "market": "B3",
+      "country": "BR",
+      "broker": "example-broker"
+    }
+  ],
+  "watchedAssets": [
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corporation",
+      "assetClass": "stock",
+      "currency": "USD",
+      "market": "NASDAQ",
+      "country": "US"
+    }
+  ],
+  "benchmarks": [
+    {
+      "name": "S&P 500",
+      "symbol": "SPX",
+      "currency": "USD",
+      "source": "manual"
+    }
+  ]
+}
