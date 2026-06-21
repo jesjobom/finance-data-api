@@ -607,7 +607,7 @@ export class FinanceStore {
   listClassificationReviews(classificationId: string): ClassificationReview[] {
     this.getNewsClassification(classificationId);
     return [...this.classificationReviews.values()].filter((item) => item.classificationId === classificationId)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
   effectiveClassificationReview(classificationId: string): ClassificationReview | undefined {
     return this.listClassificationReviews(classificationId).at(-1);
