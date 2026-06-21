@@ -22,8 +22,9 @@ and returns factual portfolio data:
 - external statements and reconciliation results
 
 The API must not be used to generate investment advice. Recommendation, risk
-scoring, news impact scoring, thesis checks, sentiment, and smart alerts belong
-outside this service.
+scoring, thesis checks, sentiment, and smart alerts belong outside this
+service. External agents may persist versioned news-impact classifications, but
+the API stores and audits those inferences rather than generating them.
 
 ## Base URL And Authentication
 
@@ -279,6 +280,33 @@ News collection rules:
 - `editorialType` distinguishes news, official analysis, research, opinion,
   advocacy, and aggregators; agents must preserve that distinction.
 
+News classifications:
+
+- `POST /v1/news/{newsId}/classifications` creates or idempotently replays an
+  agent classification.
+- Use a stable `classifierId`, a model/ruleset `classifierVersion`, and a unique
+  `externalRunId`. Reusing the same identity with different content is a
+  conflict.
+- `GET /v1/news/{newsId}/classifications?current=true` returns every current
+  classifier lineage; the API does not synthesize consensus.
+- `GET /v1/news-classifications` filters by importance, review state, country,
+  currency, sector, company/investment, direction, confidence, and publication
+  interval.
+- Corrections create a new classification with
+  `supersedesClassificationId`; prior inference remains immutable.
+- Reviews are appended through
+  `POST /v1/news-classifications/{id}/reviews`. Approval is workflow acceptance,
+  not conversion of inference into fact.
+- Unresolved company targets can later be linked through
+  `POST /v1/news-classification-targets/{id}/resolutions` without rewriting the
+  classifier payload.
+- `GET /v1/news-classification-queue` exposes `unclassified`, `unreviewed`, and
+  `needs_revision` work independently from news `processedAt`.
+- Confidence is bounded from 0 to 1. Use `uncertain` direction and `unknown`
+  magnitude instead of inventing precision.
+- Classification requests reject recommendations, trades, price targets,
+  expected returns, thesis status, and unknown fields.
+
 Watched assets:
 
 - `GET /v1/watched-assets`
@@ -336,6 +364,31 @@ For portfolio accounting tasks, use this order:
 
 Prefer stable IDs returned by the API. Assets are identified independently from
 custody accounts; the same asset ID can be held in multiple accounts.
+
+For news classification tasks, use this order:
+
+1. Pull work from
+   `/v1/news-classification-queue?kind=unclassified&limit=...`.
+2. Read the full news record from `/v1/news/{id}` if the queue response is not
+   enough for classification evidence.
+3. Submit one classification per `newsId`, `classifierId`, and `externalRunId`.
+   Keep `classifierId` stable for the agent or ruleset, and make
+   `externalRunId` unique for that specific analysis run.
+4. Store only the inferred classification, confidence, rationale, and evidence
+   keys. Do not write recommendations, trades, price targets, expected returns,
+   thesis judgments, or portfolio-specific advice.
+5. If the same run is retried after a network failure, send the identical
+   payload. A `200` replay is success. A `409` means the run identity was reused
+   with different content and must be investigated, not force-rewritten.
+6. To correct an earlier classification, create a new one with
+   `supersedesClassificationId`. Never mutate or hide the earlier inference.
+7. For unresolved companies, submit a `company` target first. Link it to a
+   known investment later through
+   `/v1/news-classification-targets/{targetId}/resolutions` with actor and
+   reason.
+8. Review queues are separate from classification queues. Approval means the
+   workflow accepts the inference for use; it does not make the inference a
+   factual publisher claim or investment advice.
 
 ## Reliability, Conflicts, And Missing Data
 
@@ -505,6 +558,69 @@ curl -fsS -X POST "$BASE_URL/v1/news" \
 Only write factual records. Do not store recommendations, opinions, generated
 investment conclusions, or unverifiable claims as factual portfolio data.
 
+Create an agent-generated news classification:
+
+```bash
+curl -fsS -X POST "$BASE_URL/v1/news/replace-with-news-id/classifications" \
+  -H "$AUTH_HEADER" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "classifierId": "macro-impact-agent",
+    "classifierType": "agent",
+    "classifierVersion": "2026-06-21-rules-v1",
+    "externalRunId": "run-2026-06-21T18-45-00Z-news-001",
+    "importance": "high",
+    "scope": "country",
+    "horizon": "short_term",
+    "overallConfidence": 0.74,
+    "tags": ["tariffs", "trade-policy"],
+    "countries": ["US", "IN"],
+    "currencies": ["USD", "INR"],
+    "sectors": [
+      {"taxonomy": "gics", "code": "industrials", "label": "Industrials"}
+    ],
+    "evidence": [
+      {
+        "key": "headline",
+        "sourceField": "title",
+        "explanation": "Headline identifies a trade-policy event involving India and the US."
+      }
+    ],
+    "targets": [
+      {
+        "targetType": "currency",
+        "targetKey": "INR",
+        "direction": "uncertain",
+        "magnitude": "unknown",
+        "confidence": 0.55,
+        "rationale": "Trade-policy uncertainty may affect currency expectations, but direction is not clear from the source alone.",
+        "evidenceKeys": ["headline"]
+      }
+    ]
+  }'
+```
+
+The same payload under the same `classifierId` and `externalRunId` replays
+idempotently. Changing the payload under that identity returns `409 conflict`.
+When confidence or direction is weak, use `uncertain` and `unknown` instead of
+inventing precision.
+
+Append a classification review:
+
+```bash
+curl -fsS -X POST "$BASE_URL/v1/news-classifications/replace-with-classification-id/reviews" \
+  -H "$AUTH_HEADER" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reviewer": "finance-review-agent",
+    "decision": "needs_revision",
+    "notes": "Country impact is plausible, but company impact needs more evidence."
+  }'
+```
+
+A review is append-only workflow state. It never rewrites the classification
+payload and never converts an inference into a factual news field.
+
 ## Agent Safety Rules
 
 - Treat the API as a factual data store, not an investment advisor.
@@ -516,6 +632,10 @@ investment conclusions, or unverifiable claims as factual portfolio data.
 - Do not invent missing factual values. Leave optional fields absent when unknown.
 - Never turn a reconciliation discrepancy into an automatic ledger correction.
 - Never retry a `409` by changing factual identity fields solely to force a write.
+- Never retry a classification `409` by fabricating a new `externalRunId` unless
+  it is genuinely a new analysis run with an intentionally corrected payload.
+- Never present a news classification as publisher fact, human-approved truth,
+  portfolio advice, or an automatic trade signal.
 - Never describe normalized benchmark comparison as formal portfolio return,
   alpha, or investment advice.
 - Do not expose API tokens, database credentials, or deployment internals in chat.

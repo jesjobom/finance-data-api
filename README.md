@@ -2,7 +2,13 @@
 
 Deterministic finance data API for the finance agent MVP.
 
-The service stores portfolio facts, custody accounts, opening state, operations, historical prices and FX, brokerage statements, reconciliations, news, watched assets, virtual portfolios, benchmarks, snapshots, and processing state. It intentionally does not produce recommendations, tax advice, impact scores, risk scores, thesis checks, or smart alerts.
+The service stores portfolio facts, custody accounts, opening state, operations,
+historical prices and FX, brokerage statements, reconciliations, news, watched
+assets, virtual portfolios, benchmarks, snapshots, processing state, and
+versioned agent-generated news classifications. Classifications remain
+explicitly inferred metadata; the service does not produce recommendations,
+tax advice, trades, price targets, expected returns, risk scores, thesis checks,
+or smart alerts.
 
 ## Stack
 
@@ -94,4 +100,8 @@ npm run validate
   not TWR, MWR, IRR, alpha, attribution, or advice.
 - Reconciliation detects discrepancies but never changes ledger facts automatically.
 - Processing state is separate from factual records.
-- No recommendation, scoring, risk interpretation, or news impact analysis belongs in this service.
+- Agent-generated news classifications may be stored as versioned, auditable
+  inferences, but the service does not generate or promote them to publisher
+  facts.
+- No recommendation, scoring, risk interpretation, trade action, price target,
+  expected return, thesis judgment, or smart alert belongs in this service.

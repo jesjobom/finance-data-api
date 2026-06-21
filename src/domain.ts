@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 export const assetClasses = ["stock", "fii", "etf", "fixed_income", "crypto", "cash", "other"] as const;
 export const operationTypes = [
@@ -291,6 +292,83 @@ export type NewsSourceHealth = {
   consecutiveFailures: number;
 };
 
+export const classificationImportances = ["low", "medium", "high", "critical"] as const;
+export const classificationScopes = ["global", "country", "sector", "company", "mixed"] as const;
+export const classificationHorizons = ["immediate", "short_term", "medium_term", "long_term"] as const;
+export const impactDirections = ["positive", "negative", "mixed", "neutral", "uncertain"] as const;
+export const impactMagnitudes = ["low", "medium", "high", "unknown"] as const;
+export const classificationReviewDecisions = ["approved", "rejected", "needs_revision"] as const;
+export type ClassificationImportance = (typeof classificationImportances)[number];
+export type ClassificationScope = (typeof classificationScopes)[number];
+export type ClassificationHorizon = (typeof classificationHorizons)[number];
+export type ImpactDirection = (typeof impactDirections)[number];
+export type ImpactMagnitude = (typeof impactMagnitudes)[number];
+export type ClassificationReviewDecision = (typeof classificationReviewDecisions)[number];
+
+export type ClassificationSector = { taxonomy: string; code: string; label?: string };
+export type ClassificationEvidence = {
+  id: string;
+  key: string;
+  sourceField: "title" | "summary" | "body";
+  excerpt?: string;
+  explanation: string;
+};
+export type ClassificationTarget = {
+  id: string;
+  classificationId: string;
+  targetType: "country" | "currency" | "sector" | "company" | "investment";
+  targetKey: string;
+  investmentId?: string;
+  companyName?: string;
+  market?: string;
+  symbol?: string;
+  direction: ImpactDirection;
+  magnitude: ImpactMagnitude;
+  confidence: number;
+  rationale: string;
+  evidenceKeys: string[];
+};
+export type NewsClassification = {
+  id: string;
+  newsId: string;
+  classifierId: string;
+  classifierType: "agent" | "rule" | "human";
+  classifierVersion: string;
+  externalRunId: string;
+  payloadHash: string;
+  importance: ClassificationImportance;
+  scope: ClassificationScope;
+  horizon: ClassificationHorizon;
+  overallConfidence: number;
+  tags: string[];
+  countries: string[];
+  currencies: string[];
+  sectors: ClassificationSector[];
+  evidence: ClassificationEvidence[];
+  targets: ClassificationTarget[];
+  supersedesClassificationId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ClassificationReview = {
+  id: string;
+  classificationId: string;
+  reviewer: string;
+  decision: ClassificationReviewDecision;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ClassificationTargetResolution = {
+  id: string;
+  targetId: string;
+  investmentId: string;
+  actor: string;
+  reason: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type WatchedAsset = {
   id: string;
   symbol: string;
@@ -447,6 +525,77 @@ export const newsCreateSchema = z.object({
   relatedInvestmentIds: z.array(z.string().trim().min(1)).default([])
 });
 export const newsPatchSchema = newsCreateSchema.partial();
+const tagSlug = z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/).max(64);
+const classificationEvidenceInputSchema = z.object({
+  key: tagSlug,
+  sourceField: z.enum(["title", "summary", "body"]),
+  excerpt: z.string().trim().min(1).max(1000).optional(),
+  explanation: z.string().trim().min(1).max(2000)
+}).strict();
+const classificationTargetInputSchema = z.object({
+  targetType: z.enum(["country", "currency", "sector", "company", "investment"]),
+  targetKey: z.string().trim().min(1).max(160).optional(),
+  investmentId: optionalString,
+  companyName: z.string().trim().min(1).max(200).optional(),
+  market: z.string().trim().min(1).max(32).transform((value) => value.toUpperCase()).optional(),
+  symbol: z.string().trim().min(1).max(32).transform((value) => value.toUpperCase()).optional(),
+  direction: z.enum(impactDirections),
+  magnitude: z.enum(impactMagnitudes),
+  confidence: z.number().finite().min(0).max(1),
+  rationale: z.string().trim().min(1).max(3000),
+  evidenceKeys: z.array(tagSlug).max(20).default([])
+}).strict().superRefine((input, context) => {
+  if (input.targetType === "investment" && !input.investmentId) context.addIssue({ code: "custom", path: ["investmentId"], message: "Investment target requires investmentId" });
+  if (input.targetType === "company" && !input.companyName) context.addIssue({ code: "custom", path: ["companyName"], message: "Company target requires companyName" });
+  if (!["investment", "company"].includes(input.targetType) && !input.targetKey) context.addIssue({ code: "custom", path: ["targetKey"], message: "Target type requires targetKey" });
+});
+export const newsClassificationCreateSchema = z.object({
+  classifierId: tagSlug,
+  classifierType: z.enum(["agent", "rule", "human"]),
+  classifierVersion: z.string().trim().min(1).max(120),
+  externalRunId: z.string().trim().min(1).max(200),
+  importance: z.enum(classificationImportances),
+  scope: z.enum(classificationScopes),
+  horizon: z.enum(classificationHorizons),
+  overallConfidence: z.number().finite().min(0).max(1),
+  tags: z.array(tagSlug).max(50).default([]),
+  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/).transform((value) => value.toUpperCase())).max(50).default([]),
+  currencies: z.array(z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase())).max(50).default([]),
+  sectors: z.array(z.object({
+    taxonomy: tagSlug,
+    code: tagSlug,
+    label: z.string().trim().min(1).max(160).optional()
+  }).strict()).max(50).default([]),
+  evidence: z.array(classificationEvidenceInputSchema).max(30).default([]),
+  targets: z.array(classificationTargetInputSchema).max(100).default([]),
+  supersedesClassificationId: optionalString
+}).strict().superRefine((input, context) => {
+  for (const [field, values] of [["tags", input.tags], ["countries", input.countries], ["currencies", input.currencies]] as const) {
+    if (new Set(values).size !== values.length) context.addIssue({ code: "custom", path: [field], message: `Duplicate ${field} values` });
+  }
+  const evidence = new Set(input.evidence.map((item) => item.key));
+  if (evidence.size !== input.evidence.length) context.addIssue({ code: "custom", path: ["evidence"], message: "Duplicate evidence keys" });
+  const sectors = input.sectors.map((sector) => `${sector.taxonomy}:${sector.code}`);
+  if (new Set(sectors).size !== sectors.length) context.addIssue({ code: "custom", path: ["sectors"], message: "Duplicate sector identity" });
+  const targets = input.targets.map((target) => classificationTargetIdentity(target));
+  if (new Set(targets).size !== targets.length) context.addIssue({ code: "custom", path: ["targets"], message: "Duplicate target identity" });
+  input.targets.forEach((target, index) => target.evidenceKeys.forEach((key) => {
+    if (!evidence.has(key)) context.addIssue({ code: "custom", path: ["targets", index, "evidenceKeys"], message: `Unknown evidence key: ${key}` });
+  }));
+});
+export const classificationReviewCreateSchema = z.object({
+  reviewer: z.string().trim().min(1).max(120),
+  decision: z.enum(classificationReviewDecisions),
+  notes: z.string().trim().min(1).max(3000).optional()
+}).strict();
+export const classificationResolutionCreateSchema = z.object({
+  investmentId: z.string().trim().min(1),
+  actor: z.string().trim().min(1).max(120),
+  reason: z.string().trim().min(1).max(2000)
+}).strict();
+export type NewsClassificationCreateInput = z.infer<typeof newsClassificationCreateSchema>;
+export type ClassificationReviewCreateInput = z.infer<typeof classificationReviewCreateSchema>;
+export type ClassificationResolutionCreateInput = z.infer<typeof classificationResolutionCreateSchema>;
 const newsSourceConfigSchema = z.object({
   fetchArticleContent: z.boolean().optional(),
   dateField: z.enum(["pubDate", "dc:date", "updated", "published"]).optional(),
@@ -529,6 +678,31 @@ export function canonicalOperationPayload(input: Record<string, unknown>): strin
     .filter(([key, value]) => value !== undefined && !["payloadHash", "version", "createdAt", "updatedAt", "reviewedAt", "reviewedBy", "reviewNotes"].includes(key))
     .sort(([left], [right]) => left.localeCompare(right)));
   return JSON.stringify(factual);
+}
+
+export function classificationTargetIdentity(target: {
+  targetType: string; targetKey?: string; investmentId?: string; companyName?: string; market?: string; symbol?: string;
+}): string {
+  const key = target.targetType === "investment" ? target.investmentId
+    : target.targetType === "company" ? `${target.companyName?.trim().toLowerCase()}|${target.market ?? ""}|${target.symbol ?? ""}`
+    : target.targetKey?.trim().toUpperCase();
+  return `${target.targetType}:${key}`;
+}
+
+export function canonicalClassificationPayload(input: Record<string, unknown>): string {
+  return stableJson(input);
+}
+export function classificationPayloadHash(input: Record<string, unknown>): string {
+  return createHash("sha256").update(canonicalClassificationPayload(input)).digest("hex");
+}
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export function nowIso(): string { return new Date().toISOString(); }

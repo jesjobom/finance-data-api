@@ -6,11 +6,14 @@ import {
   benchmarkCreateSchema,
   benchmarkObservationCreateSchema,
   brokerageAccountCreateSchema,
+  classificationResolutionCreateSchema,
+  classificationReviewCreateSchema,
   fxRateCreateSchema,
   investmentCreateSchema,
   investmentPatchSchema,
   newsCreateSchema,
   newsCollectionTriggerSchema,
+  newsClassificationCreateSchema,
   newsPatchSchema,
   newsSourceCreateSchema,
   newsSourcePatchSchema,
@@ -129,6 +132,57 @@ export function buildApp(options: { store?: any; config?: AppConfig; newsCollect
   app.post("/v1/news/:id/process", async (request) => {
     const body = processingSchema.parse(request.body);
     return store.markNewsProcessed(idParams.parse(request.params).id, body.actor, body.notes);
+  });
+  app.post("/v1/news/:id/classifications", async (request, reply) => {
+    const newsId = idParams.parse(request.params).id;
+    const result = await store.createNewsClassification(newsId, newsClassificationCreateSchema.parse(request.body));
+    return reply.code(result.result === "created" ? 201 : 200).send({ ...result.classification, importResult: result.result });
+  });
+  app.get("/v1/news/:id/classifications", async (request) => {
+    const query = z.object({ current: z.enum(["true", "false"]).transform((value) => value === "true").default(false) }).parse(request.query);
+    return store.listNewsClassificationHistory(idParams.parse(request.params).id, query.current);
+  });
+  app.get("/v1/news-classifications", async (request) => {
+    const query = z.object({
+      newsId: z.string().optional(), classifierId: z.string().optional(),
+      importance: z.enum(["low", "medium", "high", "critical"]).optional(),
+      reviewStatus: z.enum(["unreviewed", "approved", "rejected", "needs_revision"]).optional(),
+      country: z.string().length(2).optional(), currency: z.string().length(3).optional(), sector: z.string().optional(),
+      investmentId: z.string().optional(), company: z.string().optional(),
+      direction: z.enum(["positive", "negative", "mixed", "neutral", "uncertain"]).optional(),
+      minConfidence: z.coerce.number().min(0).max(1).optional(),
+      from: z.string().datetime().optional(), to: z.string().datetime().optional(),
+      current: z.enum(["true", "false"]).transform((value) => value === "true").default(true),
+      offset: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(200).default(50)
+    }).parse(request.query);
+    return store.listNewsClassifications(query);
+  });
+  app.get("/v1/news-classifications/:id", async (request) => {
+    const classification = await store.getNewsClassification(idParams.parse(request.params).id);
+    return {
+      ...classification,
+      reviews: await store.listClassificationReviews(classification.id),
+      effectiveReview: await store.effectiveClassificationReview(classification.id)
+    };
+  });
+  app.post("/v1/news-classifications/:id/reviews", async (request, reply) =>
+    reply.code(201).send(await store.addClassificationReview(
+      idParams.parse(request.params).id, classificationReviewCreateSchema.parse(request.body)
+    )));
+  app.get("/v1/news-classifications/:id/reviews", async (request) =>
+    store.listClassificationReviews(idParams.parse(request.params).id));
+  app.post("/v1/news-classification-targets/:id/resolutions", async (request, reply) =>
+    reply.code(201).send(await store.resolveClassificationTarget(
+      idParams.parse(request.params).id, classificationResolutionCreateSchema.parse(request.body)
+    )));
+  app.get("/v1/news-classification-targets/:id/resolutions", async (request) =>
+    store.listClassificationTargetResolutions(idParams.parse(request.params).id));
+  app.get("/v1/news-classification-queue", async (request) => {
+    const query = z.object({
+      kind: z.enum(["unclassified", "unreviewed", "needs_revision"]),
+      limit: z.coerce.number().int().min(1).max(200).default(100)
+    }).parse(request.query);
+    return store.classificationQueue(query.kind, query.limit);
   });
   app.post("/v1/news-sources", async (request, reply) =>
     reply.code(201).send(await store.createNewsSource(newsSourceCreateSchema.parse(request.body))));

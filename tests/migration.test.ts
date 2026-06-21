@@ -27,4 +27,13 @@ describe("accounting migration contract", () => {
       "INTERVAL '24 hours'", "uq_news_source_external_id"
     ]) expect(sql).toContain(fragment);
   });
+
+  it("adds immutable news classifications, targets, reviews, and resolutions", async () => {
+    const sql = await readFile(new URL("../migrations/005_news_classification.sql", import.meta.url), "utf8");
+    for (const fragment of [
+      "news_classifications", "news_classification_targets", "news_classification_reviews",
+      "news_classification_target_resolutions", "overall_confidence", "external_run_id",
+      "supersedes_classification_id", "idx_news_classification_targets_lookup"
+    ]) expect(sql).toContain(fragment);
+  });
 });

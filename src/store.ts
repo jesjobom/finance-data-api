@@ -4,10 +4,18 @@ import {
   type BenchmarkObservation,
   type BrokerageAccount,
   canonicalOperationPayload,
+  classificationPayloadHash,
+  classificationTargetIdentity,
+  type ClassificationReview,
+  type ClassificationReviewCreateInput,
+  type ClassificationResolutionCreateInput,
+  type ClassificationTargetResolution,
   type FxRate,
   type Investment,
   type NewsCollectionRun,
   type NewsCollectionRunStatus,
+  type NewsClassification,
+  type NewsClassificationCreateInput,
   type NewsItem,
   type NewsSource,
   type NewsSourceHealth,
@@ -59,6 +67,9 @@ export class FinanceStore {
   readonly newsSources = new Map<string, NewsSource>();
   readonly newsSourceStates = new Map<string, NewsSourceState>();
   readonly newsCollectionRuns = new Map<string, NewsCollectionRun>();
+  readonly newsClassifications = new Map<string, NewsClassification>();
+  readonly classificationReviews = new Map<string, ClassificationReview>();
+  readonly classificationResolutions = new Map<string, ClassificationTargetResolution>();
   readonly watchedAssets = new Map<string, WatchedAsset>();
   readonly virtualPortfolios = new Map<string, VirtualPortfolio>();
   readonly virtualPositions = new Map<string, VirtualPosition>();
@@ -520,6 +531,110 @@ export class FinanceStore {
     return { item: updated, result: "enriched" };
   }
 
+  createNewsClassification(newsId: string, input: NewsClassificationCreateInput):
+  { classification: NewsClassification; result: "created" | "replayed" } {
+    this.getNews(newsId);
+    const payloadHash = classificationPayloadHash(input as unknown as Record<string, unknown>);
+    const replay = [...this.newsClassifications.values()].find((item) =>
+      item.newsId === newsId && item.classifierId === input.classifierId && item.externalRunId === input.externalRunId);
+    if (replay) {
+      if (replay.payloadHash !== payloadHash) throw conflict("Classification run identity already exists with different content", {
+        newsId, classifierId: input.classifierId, externalRunId: input.externalRunId, classificationId: replay.id
+      });
+      return { classification: replay, result: "replayed" };
+    }
+    if (input.supersedesClassificationId) {
+      const previous = this.getNewsClassification(input.supersedesClassificationId);
+      if (previous.newsId !== newsId || previous.classifierId !== input.classifierId) throw validation("Superseded classification must belong to the same news and classifier");
+      if ([...this.newsClassifications.values()].some((item) => item.supersedesClassificationId === previous.id)) {
+        throw conflict("Classification is already superseded", { classificationId: previous.id });
+      }
+    }
+    const evidence = input.evidence.map((item) => ({ ...item, id: newId("evidence") }));
+    const targets = input.targets.map((target) => {
+      if (target.investmentId) this.requireInvestment(target.investmentId);
+      return {
+        ...target, id: newId("target"), classificationId: "", targetKey: classificationTargetIdentity(target)
+      };
+    });
+    const classification = this.insert(this.newsClassifications, "class", {
+      newsId, classifierId: input.classifierId, classifierType: input.classifierType,
+      classifierVersion: input.classifierVersion, externalRunId: input.externalRunId, payloadHash,
+      importance: input.importance, scope: input.scope, horizon: input.horizon, overallConfidence: input.overallConfidence,
+      tags: input.tags, countries: input.countries, currencies: input.currencies, sectors: input.sectors,
+      evidence, targets, supersedesClassificationId: input.supersedesClassificationId
+    });
+    classification.targets.forEach((target) => { target.classificationId = classification.id; });
+    return { classification, result: "created" };
+  }
+  getNewsClassification(id: string): NewsClassification { return this.get(this.newsClassifications, "news classification", id); }
+  listNewsClassifications(filters: {
+    newsId?: string; classifierId?: string; importance?: string; reviewStatus?: string; country?: string; currency?: string;
+    sector?: string; investmentId?: string; company?: string; direction?: string; minConfidence?: number;
+    from?: string; to?: string; current?: boolean; offset?: number; limit?: number;
+  } = {}): { items: NewsClassification[]; total: number; offset: number; limit: number } {
+    const superseded = new Set([...this.newsClassifications.values()].map((item) => item.supersedesClassificationId).filter(Boolean));
+    const offset = filters.offset ?? 0;
+    const limit = Math.min(filters.limit ?? 50, 200);
+    const items = [...this.newsClassifications.values()]
+      .filter((item) => !filters.current || !superseded.has(item.id))
+      .filter((item) => !filters.newsId || item.newsId === filters.newsId)
+      .filter((item) => !filters.classifierId || item.classifierId === filters.classifierId)
+      .filter((item) => !filters.importance || item.importance === filters.importance)
+      .filter((item) => !filters.country || item.countries.includes(filters.country.toUpperCase()))
+      .filter((item) => !filters.currency || item.currencies.includes(filters.currency.toUpperCase()))
+      .filter((item) => !filters.sector || item.sectors.some((sector) => sector.code === filters.sector))
+      .filter((item) => !filters.investmentId || item.targets.some((target) => target.investmentId === filters.investmentId))
+      .filter((item) => !filters.company || item.targets.some((target) => target.companyName?.toLowerCase().includes(filters.company!.toLowerCase())))
+      .filter((item) => !filters.direction || item.targets.some((target) => target.direction === filters.direction))
+      .filter((item) => filters.minConfidence === undefined || item.overallConfidence >= filters.minConfidence)
+      .filter((item) => {
+        const publishedAt = this.getNews(item.newsId).publishedAt;
+        return (!filters.from || publishedAt >= filters.from) && (!filters.to || publishedAt <= filters.to);
+      })
+      .filter((item) => !filters.reviewStatus || (this.effectiveClassificationReview(item.id)?.decision ?? "unreviewed") === filters.reviewStatus)
+      .sort((a, b) => this.getNews(b.newsId).publishedAt.localeCompare(this.getNews(a.newsId).publishedAt) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    return { items: items.slice(offset, offset + limit), total: items.length, offset, limit };
+  }
+  listNewsClassificationHistory(newsId: string, current = false): NewsClassification[] {
+    this.getNews(newsId);
+    return this.listNewsClassifications({ newsId, current, limit: 200 }).items;
+  }
+  addClassificationReview(classificationId: string, input: ClassificationReviewCreateInput): ClassificationReview {
+    this.getNewsClassification(classificationId);
+    return this.insert(this.classificationReviews, "classreview", { classificationId, ...input });
+  }
+  listClassificationReviews(classificationId: string): ClassificationReview[] {
+    this.getNewsClassification(classificationId);
+    return [...this.classificationReviews.values()].filter((item) => item.classificationId === classificationId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+  effectiveClassificationReview(classificationId: string): ClassificationReview | undefined {
+    return this.listClassificationReviews(classificationId).at(-1);
+  }
+  resolveClassificationTarget(targetId: string, input: ClassificationResolutionCreateInput): ClassificationTargetResolution {
+    this.requireInvestment(input.investmentId);
+    const target = [...this.newsClassifications.values()].flatMap((item) => item.targets).find((item) => item.id === targetId);
+    if (!target) throw notFound("classification target", targetId);
+    if (target.targetType !== "company") throw validation("Only company targets can be resolved");
+    return this.insert(this.classificationResolutions, "targetresolution", { targetId, ...input });
+  }
+  listClassificationTargetResolutions(targetId: string): ClassificationTargetResolution[] {
+    return [...this.classificationResolutions.values()].filter((item) => item.targetId === targetId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+  classificationQueue(kind: "unclassified" | "unreviewed" | "needs_revision", limit = 100): Array<NewsItem | NewsClassification> {
+    const current = this.listNewsClassifications({ current: true, limit: 200 }).items;
+    if (kind === "unclassified") {
+      const classified = new Set(current.map((item) => item.newsId));
+      return this.listNews().filter((item) => !classified.has(item.id)).slice(0, limit);
+    }
+    return current.filter((item) => {
+      const review = this.effectiveClassificationReview(item.id)?.decision;
+      return kind === "unreviewed" ? !review : review === "needs_revision";
+    }).slice(0, limit);
+  }
+
   createWatchedAsset(input: Create<WatchedAsset>): WatchedAsset { return this.insert(this.watchedAssets, "watch", { ...input, active: input.active ?? true }); }
   listWatchedAssets(): WatchedAsset[] { return [...this.watchedAssets.values()].sort((a, b) => a.symbol.localeCompare(b.symbol)); }
   createVirtualPortfolio(input: Create<VirtualPortfolio>): VirtualPortfolio { return this.insert(this.virtualPortfolios, "vp", input); }
@@ -576,6 +691,11 @@ export class FinanceStore {
     const latestSnapshot = this.latestSnapshot();
     return {
       news: [...this.news.values()].filter((item) => !item.processedAt).map(({ id, title, publishedAt }) => ({ id, title, publishedAt })),
+      unclassifiedNews: this.classificationQueue("unclassified").map((item) => {
+        const news = item as NewsItem; return { id: news.id, title: news.title, publishedAt: news.publishedAt };
+      }),
+      classificationReviews: [...this.classificationQueue("unreviewed"), ...this.classificationQueue("needs_revision")]
+        .map((item) => ({ id: item.id, newsId: (item as NewsClassification).newsId })),
       operations: [...this.operations.values()].filter((item) => !item.reviewedAt).map(({ id, investmentId, type, effectiveDate }) => ({ id, investmentId, type, effectiveDate })),
       snapshots: latestSnapshot ? [] : [{ reason: "missing_snapshot" }]
     };
@@ -955,6 +1075,8 @@ export type Allocation = { key: string; quantity: number };
 export type DailyPackage = { date: string; currentPortfolio: PortfolioPosition[]; news: NewsItem[]; recentOperations: Operation[]; pending: PendingWork };
 export type PendingWork = {
   news: Array<Pick<NewsItem, "id" | "title" | "publishedAt">>;
+  unclassifiedNews: Array<Pick<NewsItem, "id" | "title" | "publishedAt">>;
+  classificationReviews: Array<{ id: string; newsId: string }>;
   operations: Array<Pick<Operation, "id" | "investmentId" | "type" | "effectiveDate">>;
   snapshots: Array<{ reason: string }>;
 };

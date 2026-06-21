@@ -504,6 +504,89 @@ export const openApiDocument: OpenAPIV3.Document = {
           }
         ]
       },
+      ClassificationEvidence: {
+        type: "object", required: ["key", "sourceField", "explanation"],
+        properties: {
+          id: { type: "string" }, key: { type: "string" },
+          sourceField: { type: "string", enum: ["title", "summary", "body"] },
+          excerpt: { type: "string" }, explanation: { type: "string" }
+        }
+      },
+      ClassificationTarget: {
+        type: "object", required: ["targetType", "direction", "magnitude", "confidence", "rationale", "evidenceKeys"],
+        properties: {
+          id: { type: "string" }, classificationId: { type: "string" },
+          targetType: { type: "string", enum: ["country", "currency", "sector", "company", "investment"] },
+          targetKey: { type: "string" }, investmentId: { type: "string" }, companyName: { type: "string" },
+          market: { type: "string" }, symbol: { type: "string" },
+          direction: { type: "string", enum: ["positive", "negative", "mixed", "neutral", "uncertain"] },
+          magnitude: { type: "string", enum: ["low", "medium", "high", "unknown"] },
+          confidence: { type: "number", minimum: 0, maximum: 1 }, rationale: { type: "string" },
+          evidenceKeys: { type: "array", items: { type: "string" } }
+        }
+      },
+      NewsClassificationCreate: {
+        type: "object", additionalProperties: false,
+        required: ["classifierId", "classifierType", "classifierVersion", "externalRunId", "importance", "scope", "horizon", "overallConfidence"],
+        properties: {
+          classifierId: { type: "string" }, classifierType: { type: "string", enum: ["agent", "rule", "human"] },
+          classifierVersion: { type: "string" }, externalRunId: { type: "string" },
+          importance: { type: "string", enum: ["low", "medium", "high", "critical"] },
+          scope: { type: "string", enum: ["global", "country", "sector", "company", "mixed"] },
+          horizon: { type: "string", enum: ["immediate", "short_term", "medium_term", "long_term"] },
+          overallConfidence: { type: "number", minimum: 0, maximum: 1 },
+          tags: { type: "array", items: { type: "string" }, maxItems: 50 },
+          countries: { type: "array", items: { type: "string", minLength: 2, maxLength: 2 }, maxItems: 50 },
+          currencies: { type: "array", items: { type: "string", minLength: 3, maxLength: 3 }, maxItems: 50 },
+          sectors: { type: "array", maxItems: 50, items: { type: "object", required: ["taxonomy", "code"], properties: {
+            taxonomy: { type: "string" }, code: { type: "string" }, label: { type: "string" }
+          } } },
+          evidence: { type: "array", maxItems: 30, items: ref("ClassificationEvidence") },
+          targets: { type: "array", maxItems: 100, items: ref("ClassificationTarget") },
+          supersedesClassificationId: { type: "string" }
+        }
+      },
+      NewsClassification: {
+        allOf: [
+          ref("NewsClassificationCreate"),
+          { type: "object", required: ["id", "newsId", "payloadHash", "tags", "countries", "currencies", "sectors", "evidence", "targets", "createdAt", "updatedAt"],
+            properties: {
+              id: { type: "string" }, newsId: { type: "string" }, payloadHash: { type: "string" },
+              importResult: { type: "string", enum: ["created", "replayed"] },
+              reviews: { type: "array", items: ref("ClassificationReview") },
+              effectiveReview: ref("ClassificationReview"),
+              createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }
+            } }
+        ]
+      },
+      ClassificationReviewCreate: {
+        type: "object", additionalProperties: false, required: ["reviewer", "decision"],
+        properties: {
+          reviewer: { type: "string" }, decision: { type: "string", enum: ["approved", "rejected", "needs_revision"] },
+          notes: { type: "string" }
+        }
+      },
+      ClassificationReview: {
+        allOf: [ref("ClassificationReviewCreate"), { type: "object", required: ["id", "classificationId", "createdAt", "updatedAt"],
+          properties: { id: { type: "string" }, classificationId: { type: "string" },
+            createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" } } }]
+      },
+      ClassificationResolutionCreate: {
+        type: "object", additionalProperties: false, required: ["investmentId", "actor", "reason"],
+        properties: { investmentId: { type: "string" }, actor: { type: "string" }, reason: { type: "string" } }
+      },
+      ClassificationResolution: {
+        allOf: [ref("ClassificationResolutionCreate"), { type: "object", required: ["id", "targetId", "createdAt", "updatedAt"],
+          properties: { id: { type: "string" }, targetId: { type: "string" },
+            createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" } } }]
+      },
+      ClassificationPage: {
+        type: "object", required: ["items", "total", "offset", "limit"],
+        properties: {
+          items: { type: "array", items: ref("NewsClassification") }, total: { type: "integer" },
+          offset: { type: "integer" }, limit: { type: "integer" }
+        }
+      },
       WatchedAsset: {
         type: "object", required: ["id", "symbol", "name", "assetClass", "currency", "active", "createdAt", "updatedAt"],
         properties: {
@@ -771,12 +854,24 @@ export const openApiDocument: OpenAPIV3.Document = {
         }
       },
       PendingWork: {
-        type: "object", required: ["news", "operations", "snapshots"],
+        type: "object", required: ["news", "unclassifiedNews", "classificationReviews", "operations", "snapshots"],
         properties: {
           news: {
             type: "array", items: {
               type: "object", required: ["id", "title", "publishedAt"],
               properties: { id: { type: "string" }, title: { type: "string" }, publishedAt: { type: "string", format: "date-time" } }
+            }
+          },
+          unclassifiedNews: {
+            type: "array", items: {
+              type: "object", required: ["id", "title", "publishedAt"],
+              properties: { id: { type: "string" }, title: { type: "string" }, publishedAt: { type: "string", format: "date-time" } }
+            }
+          },
+          classificationReviews: {
+            type: "array", items: {
+              type: "object", required: ["id", "newsId"],
+              properties: { id: { type: "string" }, newsId: { type: "string" } }
             }
           },
           operations: {
@@ -850,6 +945,68 @@ export const openApiDocument: OpenAPIV3.Document = {
       patch: { security: auth, summary: "Update news", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("NewsCreate"), responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } }
     },
     "/v1/news/{id}/process": { post: { security: auth, summary: "Mark news processed", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("ProcessingUpdate"), responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } } },
+    "/v1/news/{id}/classifications": {
+      get: {
+        security: auth, summary: "List current or historical classifications for news",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          { name: "current", in: "query", schema: { type: "boolean", default: false } }
+        ],
+        responses: { "200": collectionResponse("News classifications", "NewsClassification"), "404": errorResponse }
+      },
+      post: {
+        security: auth, summary: "Create or idempotently replay an agent-generated news classification",
+        requestBody: body("NewsClassificationCreate"),
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": resourceResponse("Replayed classification", "NewsClassification"),
+          "201": resourceResponse("Created classification", "NewsClassification"),
+          "400": errorResponse, "404": errorResponse, "409": errorResponse
+        }
+      }
+    },
+    "/v1/news-classifications": {
+      get: {
+        security: auth, summary: "Query current or historical news classifications",
+        parameters: [
+          { name: "newsId", in: "query", schema: { type: "string" } },
+          { name: "classifierId", in: "query", schema: { type: "string" } },
+          { name: "importance", in: "query", schema: { type: "string", enum: ["low", "medium", "high", "critical"] } },
+          { name: "reviewStatus", in: "query", schema: { type: "string", enum: ["unreviewed", "approved", "rejected", "needs_revision"] } },
+          { name: "country", in: "query", schema: { type: "string" } }, { name: "currency", in: "query", schema: { type: "string" } },
+          { name: "sector", in: "query", schema: { type: "string" } }, { name: "investmentId", in: "query", schema: { type: "string" } },
+          { name: "company", in: "query", schema: { type: "string" } }, { name: "direction", in: "query", schema: { type: "string" } },
+          { name: "minConfidence", in: "query", schema: { type: "number", minimum: 0, maximum: 1 } },
+          { name: "from", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "to", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "current", in: "query", schema: { type: "boolean", default: true } },
+          { name: "offset", in: "query", schema: { type: "integer", minimum: 0, default: 0 } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } }
+        ],
+        responses: { "200": resourceResponse("Classification page", "ClassificationPage"), "400": errorResponse }
+      }
+    },
+    "/v1/news-classifications/{id}": {
+      get: { security: auth, summary: "Get classification with review state", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": resourceResponse("News classification", "NewsClassification"), "404": errorResponse } }
+    },
+    "/v1/news-classifications/{id}/reviews": {
+      get: { security: auth, summary: "List append-only classification reviews", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": collectionResponse("Classification reviews", "ClassificationReview"), "404": errorResponse } },
+      post: { security: auth, summary: "Append classification review", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("ClassificationReviewCreate"), responses: { "201": resourceResponse("Classification review", "ClassificationReview"), "400": errorResponse, "404": errorResponse } }
+    },
+    "/v1/news-classification-targets/{id}/resolutions": {
+      get: { security: auth, summary: "List company-target investment resolutions", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": collectionResponse("Target resolutions", "ClassificationResolution") } },
+      post: { security: auth, summary: "Resolve company target to investment", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("ClassificationResolutionCreate"), responses: { "201": resourceResponse("Target resolution", "ClassificationResolution"), "400": errorResponse, "404": errorResponse } }
+    },
+    "/v1/news-classification-queue": {
+      get: {
+        security: auth, summary: "List classification or review work",
+        parameters: [
+          { name: "kind", in: "query", required: true, schema: { type: "string", enum: ["unclassified", "unreviewed", "needs_revision"] } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 100 } }
+        ],
+        responses: { "200": jsonResponse("Classification work items", { type: "array", items: { oneOf: [ref("NewsItem"), ref("NewsClassification")] } }), "400": errorResponse }
+      }
+    },
     "/v1/news-sources": {
       get: {
         security: auth, summary: "List registered news sources and health",

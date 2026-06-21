@@ -2,7 +2,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import pg from "pg";
 import {
-  type Benchmark, type BenchmarkObservation, type BrokerageAccount, type FxRate, type Investment, type NewsItem, type OpeningPosition,
+  type Benchmark, type BenchmarkObservation, type BrokerageAccount, type ClassificationReview, type ClassificationReviewCreateInput,
+  type ClassificationResolutionCreateInput, type ClassificationTargetResolution, type FxRate, type Investment, type NewsClassification,
+  type NewsClassificationCreateInput, type NewsItem, type OpeningPosition,
   type NewsCollectionRun, type NewsSource, type NewsSourceState, type Operation, type Portfolio, type PortfolioSnapshot, type PortfolioStatement, type PriceObservation,
   type Reconciliation, type VirtualPortfolio, type VirtualPosition, type WatchedAsset, newId, nowIso
 } from "./domain.js";
@@ -43,6 +45,13 @@ export class PostgresFinanceStore {
   newsSourceHealth(id: string, at?: string) { return this.cache.newsSourceHealth(id, at); }
   listNewsCollectionRuns(filters?: Parameters<FinanceStore["listNewsCollectionRuns"]>[0]) { return this.cache.listNewsCollectionRuns(filters); }
   getNewsCollectionRun(id: string) { return this.cache.getNewsCollectionRun(id); }
+  getNewsClassification(id: string) { return this.cache.getNewsClassification(id); }
+  listNewsClassifications(filters?: Parameters<FinanceStore["listNewsClassifications"]>[0]) { return this.cache.listNewsClassifications(filters); }
+  listNewsClassificationHistory(newsId: string, current?: boolean) { return this.cache.listNewsClassificationHistory(newsId, current); }
+  listClassificationReviews(id: string) { return this.cache.listClassificationReviews(id); }
+  effectiveClassificationReview(id: string) { return this.cache.effectiveClassificationReview(id); }
+  listClassificationTargetResolutions(id: string) { return this.cache.listClassificationTargetResolutions(id); }
+  classificationQueue(kind: Parameters<FinanceStore["classificationQueue"]>[0], limit?: number) { return this.cache.classificationQueue(kind, limit); }
   listWatchedAssets() { return this.cache.listWatchedAssets(); }
   listVirtualPortfolios() { return this.cache.listVirtualPortfolios(); }
   listBenchmarks() { return this.cache.listBenchmarks(); }
@@ -306,6 +315,51 @@ export class PostgresFinanceStore {
     else if (result.result === "enriched") await this.updateNews(result.item.id, result.item);
     return result;
   }
+  async createNewsClassification(newsId: string, input: NewsClassificationCreateInput):
+  Promise<{ classification: NewsClassification; result: "created" | "replayed" }> {
+    const existing = this.cache.listNewsClassifications({ newsId, classifierId: input.classifierId, current: false, limit: 200 }).items
+      .find((item) => item.externalRunId === input.externalRunId);
+    const result = this.cache.createNewsClassification(newsId, input);
+    if (existing) return result;
+    const record = result.classification;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO news_classifications(id, news_id, classifier_id, classifier_type, classifier_version, external_run_id,
+         payload_hash, importance, scope, horizon, overall_confidence, tags, countries, currencies, sectors, evidence,
+         supersedes_classification_id, created_at, updated_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+        [record.id, record.newsId, record.classifierId, record.classifierType, record.classifierVersion, record.externalRunId,
+         record.payloadHash, record.importance, record.scope, record.horizon, record.overallConfidence, JSON.stringify(record.tags),
+         JSON.stringify(record.countries), JSON.stringify(record.currencies), JSON.stringify(record.sectors), JSON.stringify(record.evidence),
+         record.supersedesClassificationId, record.createdAt, record.updatedAt]);
+      for (const target of record.targets) await client.query(
+        `INSERT INTO news_classification_targets(id, classification_id, target_type, target_key, investment_id, company_name,
+         market, symbol, direction, magnitude, confidence, rationale, evidence_keys)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [target.id, record.id, target.targetType, target.targetKey, target.investmentId, target.companyName, target.market,
+         target.symbol, target.direction, target.magnitude, target.confidence, target.rationale, JSON.stringify(target.evidenceKeys)]);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  async addClassificationReview(classificationId: string, input: ClassificationReviewCreateInput): Promise<ClassificationReview> {
+    const record = this.cache.addClassificationReview(classificationId, input);
+    await this.pool.query(
+      `INSERT INTO news_classification_reviews(id, classification_id, reviewer, decision, notes, created_at, updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7)`,
+      [record.id, record.classificationId, record.reviewer, record.decision, record.notes, record.createdAt, record.updatedAt]);
+    return record;
+  }
+  async resolveClassificationTarget(targetId: string, input: ClassificationResolutionCreateInput): Promise<ClassificationTargetResolution> {
+    const record = this.cache.resolveClassificationTarget(targetId, input);
+    await this.pool.query(
+      `INSERT INTO news_classification_target_resolutions(id, target_id, investment_id, actor, reason, created_at, updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7)`,
+      [record.id, record.targetId, record.investmentId, record.actor, record.reason, record.createdAt, record.updatedAt]);
+    return record;
+  }
   private async persistNewsSourceState(state: NewsSourceState): Promise<void> {
     await this.pool.query(
       `INSERT INTO news_source_state(source_id, watermark, etag, last_modified, latest_item_at, last_attempt_at, last_success_at,
@@ -437,6 +491,21 @@ async function loadCache(pool: pg.Pool): Promise<FinanceStore> {
     const list = newsLinks.get(String(row.news_id)) ?? []; list.push(String(row.investment_id)); newsLinks.set(String(row.news_id), list);
   }
   for (const row of (await pool.query("SELECT * FROM news_items")).rows) cache.news.set(String(row.id), newsFromRow(row, newsLinks.get(String(row.id)) ?? []));
+  const classificationTargets = new Map<string, NewsClassification["targets"]>();
+  for (const row of (await pool.query("SELECT * FROM news_classification_targets")).rows) {
+    const list = classificationTargets.get(String(row.classification_id)) ?? [];
+    list.push(classificationTargetFromRow(row));
+    classificationTargets.set(String(row.classification_id), list);
+  }
+  for (const row of (await pool.query("SELECT * FROM news_classifications")).rows) {
+    cache.newsClassifications.set(String(row.id), newsClassificationFromRow(row, classificationTargets.get(String(row.id)) ?? []));
+  }
+  for (const row of (await pool.query("SELECT * FROM news_classification_reviews")).rows) {
+    cache.classificationReviews.set(String(row.id), classificationReviewFromRow(row));
+  }
+  for (const row of (await pool.query("SELECT * FROM news_classification_target_resolutions")).rows) {
+    cache.classificationResolutions.set(String(row.id), classificationResolutionFromRow(row));
+  }
   for (const row of (await pool.query("SELECT * FROM watched_assets")).rows) cache.watchedAssets.set(String(row.id), watchedFromRow(row));
   for (const row of (await pool.query("SELECT * FROM virtual_portfolios")).rows) cache.virtualPortfolios.set(String(row.id), virtualPortfolioFromRow(row));
   for (const row of (await pool.query("SELECT * FROM virtual_positions")).rows) cache.virtualPositions.set(String(row.id), virtualPositionFromRow(row));
@@ -516,6 +585,42 @@ function newsSourceFromRow(row: Row): NewsSource {
     disabledReason: optional(row.disabled_reason), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   };
 }
+function newsClassificationFromRow(row: Row, targets: NewsClassification["targets"]): NewsClassification {
+  return {
+    id: String(row.id), newsId: String(row.news_id), classifierId: String(row.classifier_id),
+    classifierType: row.classifier_type as NewsClassification["classifierType"], classifierVersion: String(row.classifier_version),
+    externalRunId: String(row.external_run_id), payloadHash: String(row.payload_hash),
+    importance: row.importance as NewsClassification["importance"], scope: row.scope as NewsClassification["scope"],
+    horizon: row.horizon as NewsClassification["horizon"], overallConfidence: Number(row.overall_confidence),
+    tags: jsonArray(row.tags), countries: jsonArray(row.countries), currencies: jsonArray(row.currencies),
+    sectors: jsonValue(row.sectors, []), evidence: jsonValue(row.evidence, []), targets,
+    supersedesClassificationId: optional(row.supersedes_classification_id),
+    createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  };
+}
+function classificationTargetFromRow(row: Row): NewsClassification["targets"][number] {
+  return {
+    id: String(row.id), classificationId: String(row.classification_id),
+    targetType: row.target_type as NewsClassification["targets"][number]["targetType"], targetKey: String(row.target_key),
+    investmentId: optional(row.investment_id), companyName: optional(row.company_name), market: optional(row.market),
+    symbol: optional(row.symbol), direction: row.direction as NewsClassification["targets"][number]["direction"],
+    magnitude: row.magnitude as NewsClassification["targets"][number]["magnitude"], confidence: Number(row.confidence),
+    rationale: String(row.rationale), evidenceKeys: jsonArray(row.evidence_keys)
+  };
+}
+function classificationReviewFromRow(row: Row): ClassificationReview {
+  return {
+    id: String(row.id), classificationId: String(row.classification_id), reviewer: String(row.reviewer),
+    decision: row.decision as ClassificationReview["decision"], notes: optional(row.notes),
+    createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  };
+}
+function classificationResolutionFromRow(row: Row): ClassificationTargetResolution {
+  return {
+    id: String(row.id), targetId: String(row.target_id), investmentId: String(row.investment_id),
+    actor: String(row.actor), reason: String(row.reason), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  };
+}
 function newsSourceStateFromRow(row: Row): NewsSourceState {
   return {
     sourceId: String(row.source_id), watermark: row.watermark ? iso(row.watermark) : undefined, etag: optional(row.etag),
@@ -538,6 +643,10 @@ function newsCollectionRunFromRow(row: Row): NewsCollectionRun {
 function jsonArray(value: unknown): string[] {
   const parsed = typeof value === "string" ? JSON.parse(value) : value;
   return Array.isArray(parsed) ? parsed.map(String) : [];
+}
+function jsonValue<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+  return (typeof value === "string" ? JSON.parse(value) : value) as T;
 }
 function watchedFromRow(row: Row): WatchedAsset {
   return { id: String(row.id), symbol: String(row.symbol), name: String(row.name), assetClass: row.asset_class as WatchedAsset["assetClass"], currency: String(row.currency), market: optional(row.market), country: optional(row.country), active: Boolean(row.active), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
