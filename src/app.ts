@@ -147,7 +147,11 @@ export function buildApp(options: { store?: any; config?: AppConfig; newsCollect
   });
   app.patch("/v1/news-sources/:id", async (request) => {
     const id = idParams.parse(request.params).id;
-    const patch = newsSourcePatchSchema.parse(request.body);
+    const rawPatch = z.record(z.string(), z.unknown()).parse(request.body);
+    const parsedPatch = newsSourcePatchSchema.parse(rawPatch);
+    const patch = Object.fromEntries(Object.keys(rawPatch).map((key) => [
+      key, (parsedPatch as Record<string, unknown>)[key]
+    ]));
     const current = await store.getNewsSource(id);
     newsSourceCreateSchema.parse({ ...current, ...patch });
     return store.updateNewsSource(id, patch);

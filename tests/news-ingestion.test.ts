@@ -203,8 +203,15 @@ describe("news source API and seed", () => {
     const auth = { authorization: "Bearer token" };
     const created = await app.inject({ method: "POST", url: "/v1/news-sources", headers: auth, payload: source() });
     expect(created.statusCode).toBe(201);
+    const createdSource = created.json();
+    const patched = await app.inject({
+      method: "PATCH", url: `/v1/news-sources/${createdSource.id}`, headers: auth, payload: { enabled: false }
+    });
+    expect(patched.json()).toMatchObject({
+      enabled: false, priority: "core", editorialType: "news", config: {}
+    });
     const listed = await app.inject({ method: "GET", url: "/v1/news-sources?enabled=true", headers: auth });
-    expect(listed.json()[0].health.status).toBe("never_collected");
+    expect(listed.json()).toEqual([]);
     const invalid = await app.inject({
       method: "POST", url: "/v1/news-collection-runs", headers: auth,
       payload: { mode: "all_enabled", from: "2026-06-19T00:00:00.000Z", to: NOW }
