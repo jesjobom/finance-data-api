@@ -186,6 +186,13 @@ describe("news collection", () => {
 });
 
 describe("news source API and seed", () => {
+  it("ships the complete consolidated catalog disabled by default", async () => {
+    const rows = await loadNewsSourceSeed();
+    expect(rows).toHaveLength(27);
+    expect(new Set(rows.map((row) => row.slug)).size).toBe(27);
+    expect(rows.every((row) => row.enabled === false)).toBe(true);
+  });
+
   it("exposes source discovery and validates 24-hour triggers", async () => {
     const store = new FinanceStore();
     const collector = new NewsCollectionService(store, {

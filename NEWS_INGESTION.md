@@ -33,9 +33,9 @@ coverage, rate-limit, and access benchmarks are approved.
 
 ## Controlled validation
 
-On 2026-06-21 UTC, the collector ran in memory against all seven enabled RSS
-sources with article retrieval disabled for the access check. All seven
-completed successfully:
+On 2026-06-21 UTC, before the catalog default was changed to disabled, the
+collector ran in memory against the seven core RSS candidates with article
+retrieval disabled for the access check. All seven completed successfully:
 
 - 235 feed items fetched;
 - 12 items accepted inside the fixed 24-hour window;
@@ -51,3 +51,6 @@ Guardian was separately validated with its public test credential:
 The controlled runs wrote no production records. Automated PostgreSQL tests
 cover migrations, source state, collection runs, idempotent news persistence,
 reload behavior, and a large inline article-body fixture.
+
+The production seed now catalogs all consolidated sources with `enabled=false`.
+The validation above remains access evidence, not an activation instruction.

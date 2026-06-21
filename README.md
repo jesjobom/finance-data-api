@@ -44,9 +44,10 @@ npm run db:migrate
 npm run db:seed
 ```
 
-The news source seed enables the seven core RSS sources and Guardian. Guardian
-requires `GUARDIAN_API_KEY`; sources whose credentials are unavailable fail
-independently without blocking other sources.
+The news source seed catalogs all 27 consolidated research sources and leaves
+every source disabled by default. Enable only reviewed sources through the API.
+Guardian requires `GUARDIAN_API_KEY`; sources whose credentials are unavailable
+fail independently without blocking other sources.
 
 Run due sources or target one source:
 
