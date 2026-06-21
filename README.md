@@ -11,6 +11,7 @@ The service stores portfolio facts, custody accounts, opening state, operations,
 - Zod request validation
 - PostgreSQL migration scripts
 - Vitest tests
+- Adapter-driven RSS/Atom/RDF and Guardian news collection
 - Checked-in OpenAPI document served at `/openapi.json`
 
 The OpenAPI document is authoritative for routes, parameters, request and
@@ -42,6 +43,23 @@ npm run db:create
 npm run db:migrate
 npm run db:seed
 ```
+
+The news source seed enables the seven core RSS sources and Guardian. Guardian
+requires `GUARDIAN_API_KEY`; sources whose credentials are unavailable fail
+independently without blocking other sources.
+
+Run due sources or target one source:
+
+```bash
+npm run news:collect
+npm run news:collect -- --source bloomberg-economics
+npm run news -- sources
+```
+
+An external cron can call `POST /v1/news-collection-runs` in `due` mode. Every
+collection is hard-limited to the latest 24 hours. A missing or stale watermark
+never causes an older backfill. See [NEWS_INGESTION.md](NEWS_INGESTION.md) for
+rollout thresholds and controlled-source validation.
 
 Reset local database objects:
 

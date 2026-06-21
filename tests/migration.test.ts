@@ -18,4 +18,13 @@ describe("accounting migration contract", () => {
     expect(sql).toContain("idx_benchmark_observations_lookup");
     expect(sql).toContain("CHECK (value > 0)");
   });
+
+  it("adds news source, state, run, lease, provenance, and 24-hour constraints", async () => {
+    const sql = await readFile(new URL("../migrations/004_news_ingestion.sql", import.meta.url), "utf8");
+    for (const fragment of [
+      "news_sources", "news_source_state", "news_collection_runs", "lease_expires_at",
+      "source_id", "external_id", "canonical_url", "retrieved_at", "duplicate_group",
+      "INTERVAL '24 hours'", "uq_news_source_external_id"
+    ]) expect(sql).toContain(fragment);
+  });
 });

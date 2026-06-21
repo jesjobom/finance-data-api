@@ -257,6 +257,27 @@ News:
 - `GET /v1/news/{id}`
 - `PATCH /v1/news/{id}`
 - `POST /v1/news/{id}/process`
+- `GET/POST /v1/news-sources`
+- `GET/PATCH /v1/news-sources/{id}`
+- `GET/POST /v1/news-collection-runs`
+- `GET /v1/news-collection-runs/{id}`
+
+News collection rules:
+
+- Discover source configuration and current health through
+  `GET /v1/news-sources`; resolved secret values are never returned.
+- Trigger routine work with `{"mode":"due"}`. Use `selected` plus `sourceIds`
+  for diagnosis or targeted collection.
+- Every collection window is limited to the latest 24 hours relative to its
+  fixed upper bound. Older manual backfills are rejected.
+- A stale source watermark is clamped to 24 hours and the unrecoverable gap is
+  reported in run diagnostics.
+- Source failures are isolated. Inspect each returned run and use
+  `GET /v1/news-collection-runs` for failure and freshness diagnosis.
+- Full article content is stored when enabled and normally accessible. Failure
+  to retrieve a body does not discard valid feed/API metadata.
+- `editorialType` distinguishes news, official analysis, research, opinion,
+  advocacy, and aggregators; agents must preserve that distinction.
 
 Watched assets:
 

@@ -1,4 +1,7 @@
 import { readProjectFile, withClient } from "./db.js";
+import { PostgresFinanceStore } from "../src/postgres-store.js";
+import { seedNewsSources } from "../src/news-source-seed.js";
+import { databaseUrl } from "./db.js";
 
 type Fixture = {
   investments: Array<{ symbol: string; name: string; assetClass: string; currency: string; market?: string; country?: string; broker?: string }>;
@@ -36,5 +39,13 @@ await withClient(async (client) => {
     );
   }
 });
+
+const store = await PostgresFinanceStore.connect(databaseUrl());
+try {
+  const result = await seedNewsSources(store);
+  console.log("news source seed", result);
+} finally {
+  await store.close();
+}
 
 console.log("seed complete");

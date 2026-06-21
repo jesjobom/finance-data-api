@@ -217,8 +217,62 @@ export const openApiDocument: OpenAPIV3.Document = {
           summary: { type: "string" },
           body: { type: "string" },
           publishedAt: { type: "string", format: "date-time" },
+          sourceId: { type: "string" },
+          externalId: { type: "string" },
+          canonicalUrl: { type: "string", format: "uri" },
+          retrievedAt: { type: "string", format: "date-time" },
+          language: { type: "string" },
+          region: { type: "string" },
+          topicTags: { type: "array", items: { type: "string" } },
+          rawHash: { type: "string" },
+          duplicateGroup: { type: "string" },
           relatedInvestmentIds: { type: "array", items: { type: "string" } }
         }
+      },
+      NewsSourceConfig: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          fetchArticleContent: { type: "boolean" },
+          dateField: { type: "string", enum: ["pubDate", "dc:date", "updated", "published"] },
+          futureToleranceMinutes: { type: "integer", minimum: 0, maximum: 1440 },
+          allowFutureEvents: { type: "boolean" },
+          query: { type: "string" },
+          section: { type: "string" },
+          pageSize: { type: "integer", minimum: 1, maximum: 200 }
+        }
+      },
+      NewsSourceCreate: {
+        type: "object",
+        required: ["slug", "name", "adapterType", "endpoint"],
+        properties: {
+          slug: { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          name: { type: "string" },
+          adapterType: { type: "string", enum: ["rss", "guardian", "alpha_vantage", "gdelt", "commercial"] },
+          endpoint: { type: "string", format: "uri" },
+          enabled: { type: "boolean", default: false },
+          priority: { type: "string", enum: ["core", "supporting", "optional", "fallback", "paid_core"] },
+          editorialType: { type: "string", enum: ["news", "official_analysis", "research", "opinion", "advocacy", "aggregator"] },
+          language: { type: "string" }, region: { type: "string" }, accessTier: { type: "string" },
+          pollingIntervalMinutes: { type: "integer", minimum: 5, maximum: 1440 },
+          staleAfterMinutes: { type: "integer", minimum: 5, maximum: 43200 },
+          overlapMinutes: { type: "integer", minimum: 0, maximum: 1440 },
+          requestTimeoutMs: { type: "integer", minimum: 1000, maximum: 120000 },
+          maxResponseBytes: { type: "integer", minimum: 1024, maximum: 20000000 },
+          maxConcurrency: { type: "integer", minimum: 1, maximum: 10 },
+          secretRef: { type: "string" }, config: ref("NewsSourceConfig"), disabledReason: { type: "string" }
+        }
+      },
+      NewsCollectionTrigger: {
+        type: "object",
+        properties: {
+          sourceIds: { type: "array", maxItems: 50, items: { type: "string" } },
+          mode: { type: "string", enum: ["due", "all_enabled", "selected"], default: "due" },
+          trigger: { type: "string", enum: ["scheduled", "manual", "cli"], default: "manual" },
+          from: { type: "string", format: "date-time" }, to: { type: "string", format: "date-time" },
+          concurrency: { type: "integer", minimum: 1, maximum: 10, default: 3 }
+        },
+        description: "The requested interval must not exceed 24 hours."
       },
       WatchedAssetCreate: {
         allOf: [{ $ref: "#/components/schemas/InvestmentCreate" }]
@@ -396,6 +450,57 @@ export const openApiDocument: OpenAPIV3.Document = {
               processedBy: { type: "string" }, processingNotes: { type: "string" },
               createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }
             }
+          }
+        ]
+      },
+      NewsSourceHealth: {
+        type: "object", required: ["status", "consecutiveFailures"],
+        properties: {
+          status: { type: "string", enum: ["healthy", "stale", "failing", "never_collected", "disabled"] },
+          latestItemAt: { type: "string", format: "date-time" }, lastSuccessAt: { type: "string", format: "date-time" },
+          consecutiveFailures: { type: "integer" }
+        }
+      },
+      NewsSource: {
+        allOf: [
+          ref("NewsSourceCreate"),
+          {
+            type: "object", required: ["id", "enabled", "priority", "editorialType", "accessTier", "pollingIntervalMinutes",
+              "staleAfterMinutes", "overlapMinutes", "requestTimeoutMs", "maxResponseBytes", "maxConcurrency", "config", "createdAt", "updatedAt"],
+            properties: {
+              id: { type: "string" }, health: ref("NewsSourceHealth"), state: { type: "object", additionalProperties: true },
+              createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }
+            }
+          }
+        ]
+      },
+      NewsCollectionCounts: {
+        type: "object", required: ["fetched", "accepted", "created", "enriched", "duplicates", "rejected", "articleFailures"],
+        properties: {
+          fetched: { type: "integer" }, accepted: { type: "integer" }, created: { type: "integer" },
+          enriched: { type: "integer" }, duplicates: { type: "integer" }, rejected: { type: "integer" },
+          articleFailures: { type: "integer" }
+        }
+      },
+      NewsCollectionRun: {
+        type: "object", required: ["id", "sourceId", "trigger", "windowFrom", "windowTo", "status", "startedAt", "counts", "diagnostics", "createdAt", "updatedAt"],
+        properties: {
+          id: { type: "string" }, sourceId: { type: "string" },
+          trigger: { type: "string", enum: ["scheduled", "manual", "cli"] },
+          windowFrom: { type: "string", format: "date-time" }, windowTo: { type: "string", format: "date-time" },
+          status: { type: "string", enum: ["running", "success", "no_change", "partial", "failed", "rate_limited", "skipped"] },
+          startedAt: { type: "string", format: "date-time" }, completedAt: { type: "string", format: "date-time" },
+          counts: ref("NewsCollectionCounts"), diagnostics: { type: "array", items: { type: "string" } },
+          errorCode: { type: "string" }, createdAt: { type: "string", format: "date-time" },
+          updatedAt: { type: "string", format: "date-time" }
+        }
+      },
+      NewsCollectionTriggerResult: {
+        oneOf: [
+          ref("NewsCollectionRun"),
+          {
+            type: "object", required: ["sourceId", "status", "reason"],
+            properties: { sourceId: { type: "string" }, status: { type: "string", enum: ["skipped"] }, reason: { type: "string" } }
           }
         ]
       },
@@ -745,6 +850,44 @@ export const openApiDocument: OpenAPIV3.Document = {
       patch: { security: auth, summary: "Update news", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("NewsCreate"), responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } }
     },
     "/v1/news/{id}/process": { post: { security: auth, summary: "Mark news processed", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("ProcessingUpdate"), responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } } },
+    "/v1/news-sources": {
+      get: {
+        security: auth, summary: "List registered news sources and health",
+        parameters: [
+          { name: "enabled", in: "query", schema: { type: "boolean" } },
+          { name: "priority", in: "query", schema: { type: "string" } },
+          { name: "editorialType", in: "query", schema: { type: "string" } }
+        ],
+        responses: { "200": collectionResponse("News sources", "NewsSource") }
+      },
+      post: { security: auth, summary: "Register news source", requestBody: body("NewsSourceCreate"), responses: { "201": resourceResponse("News source", "NewsSource"), "400": errorResponse, "409": errorResponse } }
+    },
+    "/v1/news-sources/{id}": {
+      get: { security: auth, summary: "Get news source, state, and health", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": resourceResponse("News source", "NewsSource"), "404": errorResponse } },
+      patch: { security: auth, summary: "Update news source", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("NewsSourceCreate"), responses: { "200": resourceResponse("News source", "NewsSource"), "400": errorResponse, "404": errorResponse, "409": errorResponse } }
+    },
+    "/v1/news-collection-runs": {
+      get: {
+        security: auth, summary: "List news collection runs",
+        parameters: [
+          { name: "sourceId", in: "query", schema: { type: "string" } },
+          { name: "status", in: "query", schema: { type: "string" } },
+          { name: "trigger", in: "query", schema: { type: "string" } },
+          { name: "from", in: "query", schema: { type: "string", format: "date-time" } },
+          { name: "to", in: "query", schema: { type: "string", format: "date-time" } }
+        ],
+        responses: { "200": collectionResponse("Collection runs", "NewsCollectionRun") }
+      },
+      post: {
+        security: auth, summary: "Trigger bounded news collection",
+        description: "Each source collection is isolated and limited to the latest 24 hours.",
+        requestBody: body("NewsCollectionTrigger"),
+        responses: { "202": collectionResponse("Per-source collection results", "NewsCollectionTriggerResult"), "400": errorResponse }
+      }
+    },
+    "/v1/news-collection-runs/{id}": {
+      get: { security: auth, summary: "Get news collection run", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": resourceResponse("Collection run", "NewsCollectionRun"), "404": errorResponse } }
+    },
     "/v1/watched-assets": {
       get: { security: auth, summary: "List watched assets", responses: { "200": collectionResponse("Watched assets", "WatchedAsset") } },
       post: { security: auth, summary: "Create watched asset", requestBody: body("WatchedAssetCreate"), responses: { "201": resourceResponse("Watched asset", "WatchedAsset") } }

@@ -6,7 +6,12 @@ import {
   canonicalOperationPayload,
   type FxRate,
   type Investment,
+  type NewsCollectionRun,
+  type NewsCollectionRunStatus,
   type NewsItem,
+  type NewsSource,
+  type NewsSourceHealth,
+  type NewsSourceState,
   type OpeningPosition,
   type Operation,
   type OperationRevision,
@@ -51,6 +56,9 @@ export class FinanceStore {
   readonly statements = new Map<string, PortfolioStatement>();
   readonly reconciliations = new Map<string, Reconciliation>();
   readonly news = new Map<string, NewsItem>();
+  readonly newsSources = new Map<string, NewsSource>();
+  readonly newsSourceStates = new Map<string, NewsSourceState>();
+  readonly newsCollectionRuns = new Map<string, NewsCollectionRun>();
   readonly watchedAssets = new Map<string, WatchedAsset>();
   readonly virtualPortfolios = new Map<string, VirtualPortfolio>();
   readonly virtualPositions = new Map<string, VirtualPosition>();
@@ -392,7 +400,8 @@ export class FinanceStore {
 
   createNews(input: Create<NewsItem>): NewsItem {
     for (const id of input.relatedInvestmentIds) this.requireInvestment(id);
-    return this.insert(this.news, "news", input);
+    if (input.sourceId) this.getNewsSource(input.sourceId);
+    return this.insert(this.news, "news", { ...input, topicTags: input.topicTags ?? [] });
   }
   getNews(id: string): NewsItem { return this.get(this.news, "news", id); }
   updateNews(id: string, patch: Patch<NewsItem>): NewsItem {
@@ -414,6 +423,101 @@ export class FinanceStore {
       .filter((item) => !filters.investmentId || item.relatedInvestmentIds.includes(filters.investmentId))
       .filter((item) => !filters.watched || item.relatedInvestmentIds.some((id) => heldIds.has(id) || watchedIds.has(id)))
       .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt) || a.id.localeCompare(b.id));
+  }
+
+  createNewsSource(input: Create<NewsSource>): NewsSource {
+    if ([...this.newsSources.values()].some((item) => item.slug === input.slug)) {
+      throw conflict("News source slug already exists", { slug: input.slug });
+    }
+    const record = this.insert(this.newsSources, "source", input);
+    this.newsSourceStates.set(record.id, { sourceId: record.id, consecutiveFailures: 0, updatedAt: record.createdAt });
+    return record;
+  }
+  updateNewsSource(id: string, patch: Patch<NewsSource>): NewsSource {
+    const current = this.getNewsSource(id);
+    const slug = patch.slug ?? current.slug;
+    if ([...this.newsSources.values()].some((item) => item.id !== id && item.slug === slug)) {
+      throw conflict("News source slug already exists", { slug });
+    }
+    return this.update(this.newsSources, "news source", id, patch);
+  }
+  getNewsSource(idOrSlug: string): NewsSource {
+    return this.newsSources.get(idOrSlug) ?? [...this.newsSources.values()].find((item) => item.slug === idOrSlug)
+      ?? (() => { throw notFound("news source", idOrSlug); })();
+  }
+  listNewsSources(filters: { enabled?: boolean; priority?: string; editorialType?: string } = {}): NewsSource[] {
+    return [...this.newsSources.values()]
+      .filter((item) => filters.enabled === undefined || item.enabled === filters.enabled)
+      .filter((item) => !filters.priority || item.priority === filters.priority)
+      .filter((item) => !filters.editorialType || item.editorialType === filters.editorialType)
+      .sort((a, b) => a.priority.localeCompare(b.priority) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+  getNewsSourceState(sourceId: string): NewsSourceState {
+    this.getNewsSource(sourceId);
+    return this.newsSourceStates.get(sourceId) ?? { sourceId, consecutiveFailures: 0, updatedAt: nowIso() };
+  }
+  setNewsSourceState(sourceId: string, patch: Partial<NewsSourceState>): NewsSourceState {
+    const current = this.getNewsSourceState(sourceId);
+    const updated = { ...current, ...patch, sourceId, updatedAt: nowIso() };
+    this.newsSourceStates.set(sourceId, updated);
+    return updated;
+  }
+  acquireNewsSourceLease(sourceId: string, owner: string, now: string, durationMs = 120_000): boolean {
+    const state = this.getNewsSourceState(sourceId);
+    if (state.leaseExpiresAt && state.leaseExpiresAt > now && state.leaseOwner !== owner) return false;
+    this.setNewsSourceState(sourceId, { leaseOwner: owner, leaseExpiresAt: new Date(Date.parse(now) + durationMs).toISOString() });
+    return true;
+  }
+  releaseNewsSourceLease(sourceId: string, owner: string): void {
+    const state = this.getNewsSourceState(sourceId);
+    if (state.leaseOwner === owner) this.setNewsSourceState(sourceId, { leaseOwner: undefined, leaseExpiresAt: undefined });
+  }
+  createNewsCollectionRun(input: Create<NewsCollectionRun>): NewsCollectionRun {
+    this.getNewsSource(input.sourceId);
+    return this.insert(this.newsCollectionRuns, "newsrun", input);
+  }
+  updateNewsCollectionRun(id: string, patch: Partial<Omit<NewsCollectionRun, "id" | "createdAt" | "updatedAt">>): NewsCollectionRun {
+    return this.update(this.newsCollectionRuns, "news collection run", id, patch);
+  }
+  getNewsCollectionRun(id: string): NewsCollectionRun { return this.get(this.newsCollectionRuns, "news collection run", id); }
+  listNewsCollectionRuns(filters: { sourceId?: string; status?: NewsCollectionRunStatus; trigger?: string; from?: string; to?: string } = {}): NewsCollectionRun[] {
+    return [...this.newsCollectionRuns.values()]
+      .filter((item) => !filters.sourceId || item.sourceId === filters.sourceId)
+      .filter((item) => !filters.status || item.status === filters.status)
+      .filter((item) => !filters.trigger || item.trigger === filters.trigger)
+      .filter((item) => !filters.from || item.startedAt >= filters.from)
+      .filter((item) => !filters.to || item.startedAt <= filters.to)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id));
+  }
+  newsSourceHealth(sourceId: string, at = nowIso()): NewsSourceHealth {
+    const source = this.getNewsSource(sourceId);
+    const state = this.getNewsSourceState(source.id);
+    if (!source.enabled) return { status: "disabled", latestItemAt: state.latestItemAt, lastSuccessAt: state.lastSuccessAt, consecutiveFailures: state.consecutiveFailures };
+    if (state.consecutiveFailures > 0) return { status: "failing", latestItemAt: state.latestItemAt, lastSuccessAt: state.lastSuccessAt, consecutiveFailures: state.consecutiveFailures };
+    if (!state.lastSuccessAt) return { status: "never_collected", consecutiveFailures: 0 };
+    const stale = !state.latestItemAt || Date.parse(at) - Date.parse(state.latestItemAt) > source.staleAfterMinutes * 60_000;
+    return { status: stale ? "stale" : "healthy", latestItemAt: state.latestItemAt, lastSuccessAt: state.lastSuccessAt, consecutiveFailures: 0 };
+  }
+  upsertCollectedNews(input: Omit<Create<NewsItem>, "relatedInvestmentIds"> & { relatedInvestmentIds?: string[] }): { item: NewsItem; result: "created" | "enriched" | "duplicate" } {
+    const relatedInvestmentIds = input.relatedInvestmentIds ?? [];
+    const existing = [...this.news.values()].find((item) => item.sourceId === input.sourceId && (
+      (input.externalId && item.externalId === input.externalId) ||
+      (!input.externalId && input.canonicalUrl && item.canonicalUrl === input.canonicalUrl) ||
+      (!input.externalId && !input.canonicalUrl && input.rawHash && item.rawHash === input.rawHash)
+    ));
+    if (!existing) return { item: this.createNews({ ...input, relatedInvestmentIds }), result: "created" };
+    const richer = (!existing.body && input.body) || (!existing.summary && input.summary);
+    if (!richer) return { item: existing, result: "duplicate" };
+    const updated = this.updateNews(existing.id, {
+      summary: existing.summary ?? input.summary,
+      body: existing.body ?? input.body,
+      canonicalUrl: existing.canonicalUrl ?? input.canonicalUrl,
+      retrievedAt: input.retrievedAt ?? existing.retrievedAt,
+      topicTags: [...new Set([...existing.topicTags, ...(input.topicTags ?? [])])],
+      rawHash: input.rawHash ?? existing.rawHash,
+      duplicateGroup: input.duplicateGroup ?? existing.duplicateGroup
+    });
+    return { item: updated, result: "enriched" };
   }
 
   createWatchedAsset(input: Create<WatchedAsset>): WatchedAsset { return this.insert(this.watchedAssets, "watch", { ...input, active: input.active ?? true }); }

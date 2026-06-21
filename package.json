@@ -16,10 +16,13 @@
     "db:create": "tsx scripts/create-db.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "db:reset": "tsx scripts/reset-db.ts"
+    "db:reset": "tsx scripts/reset-db.ts",
+    "news": "tsx scripts/news.ts",
+    "news:collect": "tsx scripts/news.ts collect"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
+    "fast-xml-parser": "^5.9.3",
     "fastify": "^5.6.2",
     "pg": "^8.16.3",
     "zod": "^4.2.1"

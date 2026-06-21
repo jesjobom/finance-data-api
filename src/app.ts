@@ -10,7 +10,10 @@ import {
   investmentCreateSchema,
   investmentPatchSchema,
   newsCreateSchema,
+  newsCollectionTriggerSchema,
   newsPatchSchema,
+  newsSourceCreateSchema,
+  newsSourcePatchSchema,
   openingPositionCreateSchema,
   operationCreateSchema,
   operationRevisionSchema,
@@ -25,13 +28,15 @@ import {
 } from "./domain.js";
 import { sendError } from "./errors.js";
 import { openApiDocument } from "./openapi.js";
+import { NewsCollectionService } from "./news-collector.js";
 import { FinanceStore } from "./store.js";
 
 const idParams = z.object({ id: z.string().min(1) });
 const portfolioIdParams = z.object({ portfolioId: z.string().min(1) });
 
-export function buildApp(options: { store?: any; config?: AppConfig } = {}) {
+export function buildApp(options: { store?: any; config?: AppConfig; newsCollector?: NewsCollectionService } = {}) {
   const store = options.store ?? new FinanceStore();
+  const newsCollector = options.newsCollector ?? new NewsCollectionService(store);
   const config = options.config ?? loadConfig();
   const app = Fastify({ logger: false });
 
@@ -125,6 +130,44 @@ export function buildApp(options: { store?: any; config?: AppConfig } = {}) {
     const body = processingSchema.parse(request.body);
     return store.markNewsProcessed(idParams.parse(request.params).id, body.actor, body.notes);
   });
+  app.post("/v1/news-sources", async (request, reply) =>
+    reply.code(201).send(await store.createNewsSource(newsSourceCreateSchema.parse(request.body))));
+  app.get("/v1/news-sources", async (request) => {
+    const query = z.object({
+      enabled: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
+      priority: z.string().optional(),
+      editorialType: z.string().optional()
+    }).parse(request.query);
+    const sources = await store.listNewsSources(query);
+    return Promise.all(sources.map(async (source: any) => ({ ...source, health: await store.newsSourceHealth(source.id) })));
+  });
+  app.get("/v1/news-sources/:id", async (request) => {
+    const source = await store.getNewsSource(idParams.parse(request.params).id);
+    return { ...source, health: await store.newsSourceHealth(source.id), state: await store.getNewsSourceState(source.id) };
+  });
+  app.patch("/v1/news-sources/:id", async (request) => {
+    const id = idParams.parse(request.params).id;
+    const patch = newsSourcePatchSchema.parse(request.body);
+    const current = await store.getNewsSource(id);
+    newsSourceCreateSchema.parse({ ...current, ...patch });
+    return store.updateNewsSource(id, patch);
+  });
+  app.post("/v1/news-collection-runs", async (request, reply) => {
+    const input = newsCollectionTriggerSchema.parse(request.body);
+    return reply.code(202).send(await newsCollector.trigger(input));
+  });
+  app.get("/v1/news-collection-runs", async (request) => {
+    const query = z.object({
+      sourceId: z.string().optional(),
+      status: z.enum(["running", "success", "no_change", "partial", "failed", "rate_limited", "skipped"]).optional(),
+      trigger: z.enum(["scheduled", "manual", "cli"]).optional(),
+      from: z.string().datetime().optional(),
+      to: z.string().datetime().optional()
+    }).parse(request.query);
+    return store.listNewsCollectionRuns(query);
+  });
+  app.get("/v1/news-collection-runs/:id", async (request) =>
+    store.getNewsCollectionRun(idParams.parse(request.params).id));
 
   app.post("/v1/watched-assets", async (request, reply) => {
     const input = watchedAssetCreateSchema.parse(request.body);
@@ -234,5 +277,5 @@ export function buildApp(options: { store?: any; config?: AppConfig } = {}) {
   });
   app.get("/v1/pending-work", async () => store.pendingWork());
 
-  return { app, store };
+  return { app, store, newsCollector };
 }

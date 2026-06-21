@@ -177,17 +177,118 @@ export type Reconciliation = {
 export type NewsItem = {
   id: string;
   source: string;
+  sourceId?: string;
+  externalId?: string;
   url?: string;
+  canonicalUrl?: string;
   title: string;
   summary?: string;
   body?: string;
   publishedAt: string;
+  retrievedAt?: string;
+  language?: string;
+  region?: string;
+  topicTags: string[];
+  rawHash?: string;
+  duplicateGroup?: string;
   relatedInvestmentIds: string[];
   processedAt?: string;
   processedBy?: string;
   processingNotes?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export const newsAdapterTypes = ["rss", "guardian", "alpha_vantage", "gdelt", "commercial"] as const;
+export const editorialTypes = ["news", "official_analysis", "research", "opinion", "advocacy", "aggregator"] as const;
+export const newsSourcePriorities = ["core", "supporting", "optional", "fallback", "paid_core"] as const;
+export type NewsAdapterType = (typeof newsAdapterTypes)[number];
+export type EditorialType = (typeof editorialTypes)[number];
+export type NewsSourcePriority = (typeof newsSourcePriorities)[number];
+
+export type NewsSourceConfig = {
+  fetchArticleContent?: boolean;
+  dateField?: "pubDate" | "dc:date" | "updated" | "published";
+  futureToleranceMinutes?: number;
+  allowFutureEvents?: boolean;
+  query?: string;
+  section?: string;
+  pageSize?: number;
+};
+
+export type NewsSource = {
+  id: string;
+  slug: string;
+  name: string;
+  adapterType: NewsAdapterType;
+  endpoint: string;
+  enabled: boolean;
+  priority: NewsSourcePriority;
+  editorialType: EditorialType;
+  language?: string;
+  region?: string;
+  accessTier: string;
+  pollingIntervalMinutes: number;
+  staleAfterMinutes: number;
+  overlapMinutes: number;
+  requestTimeoutMs: number;
+  maxResponseBytes: number;
+  maxConcurrency: number;
+  secretRef?: string;
+  config: NewsSourceConfig;
+  disabledReason?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NewsSourceState = {
+  sourceId: string;
+  watermark?: string;
+  etag?: string;
+  lastModified?: string;
+  latestItemAt?: string;
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  consecutiveFailures: number;
+  nextPollAt?: string;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
+  lastErrorCode?: string;
+  updatedAt: string;
+};
+
+export type NewsCollectionRunStatus = "running" | "success" | "no_change" | "partial" | "failed" | "rate_limited" | "skipped";
+export type NewsCollectionTrigger = "scheduled" | "manual" | "cli";
+export type NewsCollectionCounts = {
+  fetched: number;
+  accepted: number;
+  created: number;
+  enriched: number;
+  duplicates: number;
+  rejected: number;
+  articleFailures: number;
+};
+export type NewsCollectionRun = {
+  id: string;
+  sourceId: string;
+  trigger: NewsCollectionTrigger;
+  windowFrom: string;
+  windowTo: string;
+  status: NewsCollectionRunStatus;
+  startedAt: string;
+  completedAt?: string;
+  counts: NewsCollectionCounts;
+  diagnostics: string[];
+  errorCode?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NewsSourceHealth = {
+  status: "healthy" | "stale" | "failing" | "never_collected" | "disabled";
+  latestItemAt?: string;
+  lastSuccessAt?: string;
+  consecutiveFailures: number;
 };
 
 export type WatchedAsset = {
@@ -340,9 +441,66 @@ export const statementCreateSchema = z.object({
 export const newsCreateSchema = z.object({
   source: z.string().trim().min(1), url: z.string().url().optional(), title: z.string().trim().min(1),
   summary: optionalString, body: optionalString, publishedAt: timestamp,
+  sourceId: optionalString, externalId: optionalString, canonicalUrl: z.string().url().optional(),
+  retrievedAt: timestamp.optional(), language: optionalString, region: optionalString,
+  topicTags: z.array(z.string().trim().min(1)).default([]), rawHash: optionalString, duplicateGroup: optionalString,
   relatedInvestmentIds: z.array(z.string().trim().min(1)).default([])
 });
 export const newsPatchSchema = newsCreateSchema.partial();
+const newsSourceConfigSchema = z.object({
+  fetchArticleContent: z.boolean().optional(),
+  dateField: z.enum(["pubDate", "dc:date", "updated", "published"]).optional(),
+  futureToleranceMinutes: z.number().int().min(0).max(1440).optional(),
+  allowFutureEvents: z.boolean().optional(),
+  query: z.string().trim().min(1).optional(),
+  section: z.string().trim().min(1).optional(),
+  pageSize: z.number().int().min(1).max(200).optional()
+}).strict();
+const newsSourceBaseSchema = z.object({
+  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  name: z.string().trim().min(1),
+  adapterType: z.enum(newsAdapterTypes),
+  endpoint: z.string().url().refine((value) => ["http:", "https:"].includes(new URL(value).protocol), "HTTP(S) endpoint required"),
+  enabled: z.boolean().default(false),
+  priority: z.enum(newsSourcePriorities).default("optional"),
+  editorialType: z.enum(editorialTypes).default("news"),
+  language: optionalString,
+  region: optionalString,
+  accessTier: z.string().trim().min(1).default("free"),
+  pollingIntervalMinutes: z.number().int().min(5).max(1440).default(15),
+  staleAfterMinutes: z.number().int().min(5).max(43200).default(1440),
+  overlapMinutes: z.number().int().min(0).max(1440).default(120),
+  requestTimeoutMs: z.number().int().min(1000).max(120000).default(15000),
+  maxResponseBytes: z.number().int().min(1024).max(20_000_000).default(3_000_000),
+  maxConcurrency: z.number().int().min(1).max(10).default(2),
+  secretRef: z.string().trim().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+  config: newsSourceConfigSchema.default({}),
+  disabledReason: optionalString
+});
+export const newsSourceCreateSchema = newsSourceBaseSchema.superRefine((input, context) => {
+  if (input.adapterType === "guardian" && !input.secretRef) {
+    context.addIssue({ code: "custom", path: ["secretRef"], message: "Guardian source requires a secret reference" });
+  }
+});
+export const newsSourcePatchSchema = newsSourceBaseSchema.partial();
+export const newsCollectionTriggerSchema = z.object({
+  sourceIds: z.array(z.string().trim().min(1)).max(50).optional(),
+  mode: z.enum(["due", "all_enabled", "selected"]).default("due"),
+  trigger: z.enum(["scheduled", "manual", "cli"]).default("manual"),
+  from: timestamp.optional(),
+  to: timestamp.optional(),
+  concurrency: z.number().int().min(1).max(10).default(3)
+}).superRefine((input, context) => {
+  if (input.mode === "selected" && !input.sourceIds?.length) {
+    context.addIssue({ code: "custom", path: ["sourceIds"], message: "Selected mode requires sourceIds" });
+  }
+  if (input.from && input.to && Date.parse(input.to) - Date.parse(input.from) > 86_400_000) {
+    context.addIssue({ code: "custom", path: ["from"], message: "Collection window cannot exceed 24 hours" });
+  }
+  if (input.from && input.to && input.from > input.to) {
+    context.addIssue({ code: "custom", path: ["from"], message: "from must not be after to" });
+  }
+});
 export const watchedAssetCreateSchema = z.object({
   symbol: z.string().trim().min(1), name: z.string().trim().min(1), assetClass: z.enum(assetClasses),
   currency, market: optionalString, country: optionalString
