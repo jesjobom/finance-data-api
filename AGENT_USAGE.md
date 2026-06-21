@@ -276,7 +276,10 @@ News collection rules:
 - Source failures are isolated. Inspect each returned run and use
   `GET /v1/news-collection-runs` for failure and freshness diagnosis.
 - Full article content is stored when enabled and normally accessible. Failure
-  to retrieve a body does not discard valid feed/API metadata.
+  to retrieve a body can make a collection run `partial`, but it does not
+  discard valid feed/API metadata. In these cases the news item may have
+  `body` absent while still retaining title, URL, published time, source,
+  summary when available, and tags.
 - `editorialType` distinguishes news, official analysis, research, opinion,
   advocacy, and aggregators; agents must preserve that distinction.
 
@@ -370,13 +373,16 @@ For news classification tasks, use this order:
 1. Pull work from
    `/v1/news-classification-queue?kind=unclassified&limit=...`.
 2. Read the full news record from `/v1/news/{id}` if the queue response is not
-   enough for classification evidence.
+   enough for classification evidence. Treat `body` as optional: some valid
+   news items only have title, URL, summary, and source metadata because the
+   publisher blocks full-article retrieval.
 3. Submit one classification per `newsId`, `classifierId`, and `externalRunId`.
    Keep `classifierId` stable for the agent or ruleset, and make
    `externalRunId` unique for that specific analysis run.
 4. Store only the inferred classification, confidence, rationale, and evidence
-   keys. Do not write recommendations, trades, price targets, expected returns,
-   thesis judgments, or portfolio-specific advice.
+   keys that are supported by the available fields. Do not infer facts that
+   require missing article text, and do not write recommendations, trades, price
+   targets, expected returns, thesis judgments, or portfolio-specific advice.
 5. If the same run is retried after a network failure, send the identical
    payload. A `200` replay is success. A `409` means the run identity was reused
    with different content and must be investigated, not force-rewritten.
