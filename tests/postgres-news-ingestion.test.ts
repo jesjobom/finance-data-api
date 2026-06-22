@@ -47,9 +47,10 @@ describe("PostgreSQL news ingestion persistence", () => {
       store = await PostgresFinanceStore.connect(testUrl.toString());
       expect(store.getNewsSource(source.id).slug).toBe("persistence-feed");
       expect(store.getNewsSourceState(source.id).watermark).toBe("2026-06-21T12:00:00.000Z");
-      expect(store.listNews()).toHaveLength(2);
-      expect(store.listNews().find((item) => item.externalId === "large-body")?.body).toHaveLength(largeBody.length);
-      expect(store.listNews().find((item) => item.externalId === "large-body")?.topicTags)
+      const news = await store.listNews();
+      expect(news).toHaveLength(2);
+      expect(news.find((item) => item.externalId === "large-body")?.body).toHaveLength(largeBody.length);
+      expect(news.find((item) => item.externalId === "large-body")?.topicTags)
         .toEqual(["Economia", "Orçamento Federal"]);
       expect(store.listNewsCollectionRuns({ sourceId: source.id })).toEqual([
         expect.objectContaining({

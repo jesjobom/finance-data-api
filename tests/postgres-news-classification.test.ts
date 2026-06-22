@@ -17,6 +17,7 @@ describe("PostgreSQL news classification persistence", () => {
     try {
       await admin.query(`CREATE DATABASE "${databaseName}"`);
       let store = await PostgresFinanceStore.connect(testUrl.toString());
+      const observer = await PostgresFinanceStore.connect(testUrl.toString());
       const investment = await store.createInvestment({
         ...investmentCreateSchema.parse({
           symbol: "AAPL", name: "Apple Inc.", assetClass: "stock", currency: "USD", market: "NASDAQ"
@@ -34,7 +35,8 @@ describe("PostgreSQL news classification persistence", () => {
           direction: "uncertain", magnitude: "unknown", confidence: 0.5, rationale: "Indirect effect", evidenceKeys: ["macro"]
         }]
       });
-      const created = await store.createNewsClassification(news.id, input);
+      expect((await observer.classificationQueue("unclassified")).map((item) => item.id)).toContain(news.id);
+      const created = await observer.createNewsClassification(news.id, input);
       expect((await store.createNewsClassification(news.id, input)).result).toBe("replayed");
       await store.addClassificationReview(created.classification.id, {
         reviewer: "jj", decision: "approved", notes: "Reviewed"
@@ -42,13 +44,15 @@ describe("PostgreSQL news classification persistence", () => {
       await store.resolveClassificationTarget(created.classification.targets[0].id, {
         investmentId: investment.id, actor: "jj", reason: "Matched company"
       });
+      expect(await observer.classificationQueue("unclassified")).toEqual([]);
+      await observer.close();
       await store.close();
 
       store = await PostgresFinanceStore.connect(testUrl.toString());
-      const loaded = store.getNewsClassification(created.classification.id);
+      const loaded = await store.getNewsClassification(created.classification.id);
       expect(loaded.targets[0].companyName).toBe("Apple Inc.");
-      expect(store.effectiveClassificationReview(loaded.id)?.decision).toBe("approved");
-      expect(store.listClassificationTargetResolutions(loaded.targets[0].id)[0].investmentId).toBe(investment.id);
+      expect((await store.effectiveClassificationReview(loaded.id))?.decision).toBe("approved");
+      expect((await store.listClassificationTargetResolutions(loaded.targets[0].id))[0].investmentId).toBe(investment.id);
       await store.close();
     } finally {
       await admin.query(`DROP DATABASE IF EXISTS "${databaseName}"`);

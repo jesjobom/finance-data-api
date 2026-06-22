@@ -13,6 +13,8 @@ import { FinanceStore } from "./store.js";
 type Row = Record<string, unknown>;
 
 export class PostgresFinanceStore {
+  private newsRefresh?: Promise<void>;
+
   private constructor(private readonly pool: pg.Pool, private readonly cache: FinanceStore) {}
 
   static async connect(connectionString: string): Promise<PostgresFinanceStore> {
@@ -37,21 +39,48 @@ export class PostgresFinanceStore {
   getStatement(id: string) { return this.cache.getStatement(id); }
   listReconciliations(accountId?: string) { return this.cache.listReconciliations(accountId); }
   getReconciliation(id: string) { return this.cache.getReconciliation(id); }
-  listNews(filters?: Parameters<FinanceStore["listNews"]>[0]) { return this.cache.listNews(filters); }
-  getNews(id: string) { return this.cache.getNews(id); }
+  async listNews(filters?: Parameters<FinanceStore["listNews"]>[0]) {
+    await this.refreshNewsDomain();
+    return this.cache.listNews(filters);
+  }
+  async getNews(id: string) {
+    await this.refreshNewsDomain();
+    return this.cache.getNews(id);
+  }
   listNewsSources(filters?: Parameters<FinanceStore["listNewsSources"]>[0]) { return this.cache.listNewsSources(filters); }
   getNewsSource(id: string) { return this.cache.getNewsSource(id); }
   getNewsSourceState(id: string) { return this.cache.getNewsSourceState(id); }
   newsSourceHealth(id: string, at?: string) { return this.cache.newsSourceHealth(id, at); }
   listNewsCollectionRuns(filters?: Parameters<FinanceStore["listNewsCollectionRuns"]>[0]) { return this.cache.listNewsCollectionRuns(filters); }
   getNewsCollectionRun(id: string) { return this.cache.getNewsCollectionRun(id); }
-  getNewsClassification(id: string) { return this.cache.getNewsClassification(id); }
-  listNewsClassifications(filters?: Parameters<FinanceStore["listNewsClassifications"]>[0]) { return this.cache.listNewsClassifications(filters); }
-  listNewsClassificationHistory(newsId: string, current?: boolean) { return this.cache.listNewsClassificationHistory(newsId, current); }
-  listClassificationReviews(id: string) { return this.cache.listClassificationReviews(id); }
-  effectiveClassificationReview(id: string) { return this.cache.effectiveClassificationReview(id); }
-  listClassificationTargetResolutions(id: string) { return this.cache.listClassificationTargetResolutions(id); }
-  classificationQueue(kind: Parameters<FinanceStore["classificationQueue"]>[0], limit?: number) { return this.cache.classificationQueue(kind, limit); }
+  async getNewsClassification(id: string) {
+    await this.refreshNewsDomain();
+    return this.cache.getNewsClassification(id);
+  }
+  async listNewsClassifications(filters?: Parameters<FinanceStore["listNewsClassifications"]>[0]) {
+    await this.refreshNewsDomain();
+    return this.cache.listNewsClassifications(filters);
+  }
+  async listNewsClassificationHistory(newsId: string, current?: boolean) {
+    await this.refreshNewsDomain();
+    return this.cache.listNewsClassificationHistory(newsId, current);
+  }
+  async listClassificationReviews(id: string) {
+    await this.refreshNewsDomain();
+    return this.cache.listClassificationReviews(id);
+  }
+  async effectiveClassificationReview(id: string) {
+    await this.refreshNewsDomain();
+    return this.cache.effectiveClassificationReview(id);
+  }
+  async listClassificationTargetResolutions(id: string) {
+    await this.refreshNewsDomain();
+    return this.cache.listClassificationTargetResolutions(id);
+  }
+  async classificationQueue(kind: Parameters<FinanceStore["classificationQueue"]>[0], limit?: number) {
+    await this.refreshNewsDomain();
+    return this.cache.classificationQueue(kind, limit);
+  }
   listWatchedAssets() { return this.cache.listWatchedAssets(); }
   listVirtualPortfolios() { return this.cache.listVirtualPortfolios(); }
   listBenchmarks() { return this.cache.listBenchmarks(); }
@@ -64,10 +93,20 @@ export class PostgresFinanceStore {
   dailyPackage(date: string) { return this.cache.dailyPackage(date); }
   changesSince(cursor?: string) { return this.cache.changesSince(cursor); }
   compareVirtualPortfolio(id: string) { return this.cache.compareVirtualPortfolio(id); }
-  pendingWork() { return this.cache.pendingWork(); }
+  async pendingWork() {
+    await this.refreshNewsDomain();
+    return this.cache.pendingWork();
+  }
   portfolioAnalytics(asOf: string, source?: string) { return this.cache.portfolioAnalytics(asOf, source); }
   concentration(asOf: string, top: number, source?: string) { return this.cache.concentration(asOf, top, source); }
   portfolioEvolution(input: Parameters<FinanceStore["portfolioEvolution"]>[0]) { return this.cache.portfolioEvolution(input); }
+
+  private async refreshNewsDomain(): Promise<void> {
+    if (!this.newsRefresh) {
+      this.newsRefresh = refreshNewsDomain(this.pool, this.cache).finally(() => { this.newsRefresh = undefined; });
+    }
+    await this.newsRefresh;
+  }
 
   async updatePortfolio(id: string, patch: Partial<Omit<Portfolio, "id" | "createdAt" | "updatedAt">>): Promise<Portfolio> {
     const updated = this.cache.updatePortfolio(id, patch);
@@ -223,6 +262,7 @@ export class PostgresFinanceStore {
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
   async updateNews(id: string, patch: Partial<Omit<NewsItem, "id" | "createdAt" | "updatedAt">>): Promise<NewsItem> {
+    await this.refreshNewsDomain();
     const updated = this.cache.updateNews(id, patch);
     const client = await this.pool.connect();
     try {
@@ -243,6 +283,7 @@ export class PostgresFinanceStore {
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
   async markNewsProcessed(id: string, actor: string, notes?: string): Promise<NewsItem> {
+    await this.refreshNewsDomain();
     const updated = this.cache.markNewsProcessed(id, actor, notes);
     await this.pool.query("UPDATE news_items SET processed_at=$2, processed_by=$3, processing_notes=$4, updated_at=$5 WHERE id=$1",
       [id, updated.processedAt, actor, notes, updated.updatedAt]);
@@ -319,6 +360,7 @@ export class PostgresFinanceStore {
   }
   async createNewsClassification(newsId: string, input: NewsClassificationCreateInput):
   Promise<{ classification: NewsClassification; result: "created" | "replayed" }> {
+    await this.refreshNewsDomain();
     const existing = this.cache.listNewsClassifications({ newsId, classifierId: input.classifierId, current: false, limit: 200 }).items
       .find((item) => item.externalRunId === input.externalRunId);
     const result = this.cache.createNewsClassification(newsId, input);
@@ -347,6 +389,7 @@ export class PostgresFinanceStore {
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
   async addClassificationReview(classificationId: string, input: ClassificationReviewCreateInput): Promise<ClassificationReview> {
+    await this.refreshNewsDomain();
     const record = this.cache.addClassificationReview(classificationId, input);
     await this.pool.query(
       `INSERT INTO news_classification_reviews(id, classification_id, reviewer, decision, notes, created_at, updated_at)
@@ -355,6 +398,7 @@ export class PostgresFinanceStore {
     return record;
   }
   async resolveClassificationTarget(targetId: string, input: ClassificationResolutionCreateInput): Promise<ClassificationTargetResolution> {
+    await this.refreshNewsDomain();
     const record = this.cache.resolveClassificationTarget(targetId, input);
     await this.pool.query(
       `INSERT INTO news_classification_target_resolutions(id, target_id, investment_id, actor, reason, created_at, updated_at)
@@ -488,26 +532,7 @@ async function loadCache(pool: pg.Pool): Promise<FinanceStore> {
   for (const row of (await pool.query("SELECT * FROM news_collection_runs")).rows) {
     cache.newsCollectionRuns.set(String(row.id), newsCollectionRunFromRow(row));
   }
-  const newsLinks = new Map<string, string[]>();
-  for (const row of (await pool.query("SELECT news_id, investment_id FROM news_investments")).rows) {
-    const list = newsLinks.get(String(row.news_id)) ?? []; list.push(String(row.investment_id)); newsLinks.set(String(row.news_id), list);
-  }
-  for (const row of (await pool.query("SELECT * FROM news_items")).rows) cache.news.set(String(row.id), newsFromRow(row, newsLinks.get(String(row.id)) ?? []));
-  const classificationTargets = new Map<string, NewsClassification["targets"]>();
-  for (const row of (await pool.query("SELECT * FROM news_classification_targets")).rows) {
-    const list = classificationTargets.get(String(row.classification_id)) ?? [];
-    list.push(classificationTargetFromRow(row));
-    classificationTargets.set(String(row.classification_id), list);
-  }
-  for (const row of (await pool.query("SELECT * FROM news_classifications")).rows) {
-    cache.newsClassifications.set(String(row.id), newsClassificationFromRow(row, classificationTargets.get(String(row.id)) ?? []));
-  }
-  for (const row of (await pool.query("SELECT * FROM news_classification_reviews")).rows) {
-    cache.classificationReviews.set(String(row.id), classificationReviewFromRow(row));
-  }
-  for (const row of (await pool.query("SELECT * FROM news_classification_target_resolutions")).rows) {
-    cache.classificationResolutions.set(String(row.id), classificationResolutionFromRow(row));
-  }
+  await refreshNewsDomain(pool, cache);
   for (const row of (await pool.query("SELECT * FROM watched_assets")).rows) cache.watchedAssets.set(String(row.id), watchedFromRow(row));
   for (const row of (await pool.query("SELECT * FROM virtual_portfolios")).rows) cache.virtualPortfolios.set(String(row.id), virtualPortfolioFromRow(row));
   for (const row of (await pool.query("SELECT * FROM virtual_positions")).rows) cache.virtualPositions.set(String(row.id), virtualPositionFromRow(row));
@@ -526,6 +551,64 @@ async function loadCache(pool: pg.Pool): Promise<FinanceStore> {
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   });
   return cache;
+}
+
+async function refreshNewsDomain(pool: pg.Pool, cache: FinanceStore): Promise<void> {
+  const client = await pool.connect();
+  let linksResult;
+  let newsResult;
+  let targetsResult;
+  let classificationsResult;
+  let reviewsResult;
+  let resolutionsResult;
+  try {
+    await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    linksResult = await client.query("SELECT news_id, investment_id FROM news_investments");
+    newsResult = await client.query("SELECT * FROM news_items");
+    targetsResult = await client.query("SELECT * FROM news_classification_targets");
+    classificationsResult = await client.query("SELECT * FROM news_classifications");
+    reviewsResult = await client.query("SELECT * FROM news_classification_reviews");
+    resolutionsResult = await client.query("SELECT * FROM news_classification_target_resolutions");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const newsLinks = new Map<string, string[]>();
+  for (const row of linksResult.rows) {
+    const list = newsLinks.get(String(row.news_id)) ?? [];
+    list.push(String(row.investment_id));
+    newsLinks.set(String(row.news_id), list);
+  }
+  const news = new Map<string, NewsItem>();
+  for (const row of newsResult.rows) news.set(String(row.id), newsFromRow(row, newsLinks.get(String(row.id)) ?? []));
+
+  const classificationTargets = new Map<string, NewsClassification["targets"]>();
+  for (const row of targetsResult.rows) {
+    const list = classificationTargets.get(String(row.classification_id)) ?? [];
+    list.push(classificationTargetFromRow(row));
+    classificationTargets.set(String(row.classification_id), list);
+  }
+  const classifications = new Map<string, NewsClassification>();
+  for (const row of classificationsResult.rows) {
+    classifications.set(String(row.id), newsClassificationFromRow(row, classificationTargets.get(String(row.id)) ?? []));
+  }
+  const reviews = new Map<string, ClassificationReview>();
+  for (const row of reviewsResult.rows) reviews.set(String(row.id), classificationReviewFromRow(row));
+  const resolutions = new Map<string, ClassificationTargetResolution>();
+  for (const row of resolutionsResult.rows) resolutions.set(String(row.id), classificationResolutionFromRow(row));
+
+  cache.news.clear();
+  news.forEach((value, key) => cache.news.set(key, value));
+  cache.newsClassifications.clear();
+  classifications.forEach((value, key) => cache.newsClassifications.set(key, value));
+  cache.classificationReviews.clear();
+  reviews.forEach((value, key) => cache.classificationReviews.set(key, value));
+  cache.classificationResolutions.clear();
+  resolutions.forEach((value, key) => cache.classificationResolutions.set(key, value));
 }
 
 const iso = (value: unknown) => value instanceof Date ? value.toISOString() : String(value);
