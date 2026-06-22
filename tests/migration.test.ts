@@ -36,4 +36,14 @@ describe("accounting migration contract", () => {
       "supersedes_classification_id", "idx_news_classification_targets_lookup"
     ]) expect(sql).toContain(fragment);
   });
+
+  it("repairs and enforces news collection run JSON integrity", async () => {
+    const sql = await readFile(new URL("../migrations/006_news_collection_run_json_integrity.sql", import.meta.url), "utf8");
+    for (const fragment of [
+      "jsonb_typeof(diagnostics) <> 'array'",
+      "collection_interrupted",
+      "news_collection_runs_counts_object",
+      "news_collection_runs_diagnostics_array"
+    ]) expect(sql).toContain(fragment);
+  });
 });

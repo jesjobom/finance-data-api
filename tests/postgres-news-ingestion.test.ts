@@ -25,12 +25,16 @@ describe("PostgreSQL news ingestion persistence", () => {
       }));
       const xml = `<rss><channel><item><guid>persist-1</guid><title>Persisted</title>
         <link>https://news.example.com/persisted</link><pubDate>Sun, 21 Jun 2026 11:00:00 GMT</pubDate></item></channel></rss>`;
+      await store.setNewsSourceState(source.id, { watermark: "2026-06-19T12:00:00.000Z" });
       const collector = new NewsCollectionService(store, {
         now: () => "2026-06-21T12:00:00.000Z",
         fetchImpl: (async () => new Response(xml, { headers: { "content-type": "application/rss+xml" } })) as typeof fetch
       });
       const run = await collector.collectSource(source.id, { trigger: "manual" });
       expect("status" in run && run.status).toBe("success");
+      expect("diagnostics" in run && run.diagnostics).toEqual([
+        "collection window clamped to the latest 24 hours; older gap is unrecoverable"
+      ]);
       const largeBody = "internal-content ".repeat(32_000);
       await store.upsertCollectedNews({
         source: source.name, sourceId: source.id, externalId: "large-body", title: "Large body fixture",
@@ -44,7 +48,11 @@ describe("PostgreSQL news ingestion persistence", () => {
       expect(store.getNewsSourceState(source.id).watermark).toBe("2026-06-21T12:00:00.000Z");
       expect(store.listNews()).toHaveLength(2);
       expect(store.listNews().find((item) => item.externalId === "large-body")?.body).toHaveLength(largeBody.length);
-      expect(store.listNewsCollectionRuns({ sourceId: source.id })).toHaveLength(1);
+      expect(store.listNewsCollectionRuns({ sourceId: source.id })).toEqual([
+        expect.objectContaining({
+          diagnostics: ["collection window clamped to the latest 24 hours; older gap is unrecoverable"]
+        })
+      ]);
       await store.close();
     } finally {
       await admin.query(`DROP DATABASE IF EXISTS "${databaseName}"`);

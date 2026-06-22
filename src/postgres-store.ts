@@ -299,14 +299,16 @@ export class PostgresFinanceStore {
       `INSERT INTO news_collection_runs(id, source_id, trigger_type, window_from, window_to, status, started_at, completed_at,
        counts, diagnostics, error_code, created_at, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [record.id, record.sourceId, record.trigger, record.windowFrom, record.windowTo, record.status, record.startedAt,
-       record.completedAt, record.counts, record.diagnostics, record.errorCode, record.createdAt, record.updatedAt]);
+       record.completedAt, JSON.stringify(record.counts), JSON.stringify(record.diagnostics), record.errorCode,
+       record.createdAt, record.updatedAt]);
     return record;
   }
   async updateNewsCollectionRun(id: string, patch: Partial<Omit<NewsCollectionRun, "id" | "createdAt" | "updatedAt">>): Promise<NewsCollectionRun> {
     const record = this.cache.updateNewsCollectionRun(id, patch);
     await this.pool.query(
       `UPDATE news_collection_runs SET status=$2, completed_at=$3, counts=$4, diagnostics=$5, error_code=$6, updated_at=$7 WHERE id=$1`,
-      [id, record.status, record.completedAt, record.counts, record.diagnostics, record.errorCode, record.updatedAt]);
+      [id, record.status, record.completedAt, JSON.stringify(record.counts), JSON.stringify(record.diagnostics),
+       record.errorCode, record.updatedAt]);
     return record;
   }
   async upsertCollectedNews(input: Parameters<FinanceStore["upsertCollectedNews"]>[0]): Promise<ReturnType<FinanceStore["upsertCollectedNews"]>> {
