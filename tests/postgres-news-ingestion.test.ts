@@ -39,7 +39,8 @@ describe("PostgreSQL news ingestion persistence", () => {
       await store.upsertCollectedNews({
         source: source.name, sourceId: source.id, externalId: "large-body", title: "Large body fixture",
         body: largeBody, publishedAt: "2026-06-21T10:00:00.000Z", retrievedAt: "2026-06-21T12:00:00.000Z",
-        topicTags: [], rawHash: "large-body-hash", duplicateGroup: "large-body-group", relatedInvestmentIds: []
+        topicTags: ["Economia", "Orçamento Federal"], rawHash: "large-body-hash",
+        duplicateGroup: "large-body-group", relatedInvestmentIds: []
       });
       await store.close();
 
@@ -48,6 +49,8 @@ describe("PostgreSQL news ingestion persistence", () => {
       expect(store.getNewsSourceState(source.id).watermark).toBe("2026-06-21T12:00:00.000Z");
       expect(store.listNews()).toHaveLength(2);
       expect(store.listNews().find((item) => item.externalId === "large-body")?.body).toHaveLength(largeBody.length);
+      expect(store.listNews().find((item) => item.externalId === "large-body")?.topicTags)
+        .toEqual(["Economia", "Orçamento Federal"]);
       expect(store.listNewsCollectionRuns({ sourceId: source.id })).toEqual([
         expect.objectContaining({
           diagnostics: ["collection window clamped to the latest 24 hours; older gap is unrecoverable"]

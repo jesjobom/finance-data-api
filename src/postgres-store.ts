@@ -380,7 +380,7 @@ export class PostgresFinanceStore {
        language, region, topic_tags, raw_hash, duplicate_group, processed_at, processed_by, processing_notes, created_at, updated_at)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
       [record.id, record.source, record.sourceId, record.externalId, record.url, record.canonicalUrl, record.title, record.summary,
-       record.body, record.publishedAt, record.retrievedAt, record.language, record.region, record.topicTags, record.rawHash,
+       record.body, record.publishedAt, record.retrievedAt, record.language, record.region, JSON.stringify(record.topicTags), record.rawHash,
        record.duplicateGroup, record.processedAt, record.processedBy, record.processingNotes, record.createdAt, record.updatedAt]);
   }
   async createWatchedAsset(input: Omit<WatchedAsset, "id" | "createdAt" | "updatedAt">): Promise<WatchedAsset> {
