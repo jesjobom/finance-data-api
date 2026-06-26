@@ -215,6 +215,18 @@ export type NewsSourceConfig = {
   query?: string;
   section?: string;
   pageSize?: number;
+  candidateFilters?: {
+    whitelist?: NewsSourceCandidateFilterRule[];
+    blacklist?: NewsSourceCandidateFilterRule[];
+  };
+};
+
+export type NewsSourceCandidateFilterRule = {
+  value: string;
+  mode: "contains" | "word" | "exact" | "regex";
+  target: "title" | "category" | "both";
+  enabled?: boolean;
+  reason?: string;
 };
 
 export type NewsSource = {
@@ -596,6 +608,20 @@ export const classificationResolutionCreateSchema = z.object({
 export type NewsClassificationCreateInput = z.infer<typeof newsClassificationCreateSchema>;
 export type ClassificationReviewCreateInput = z.infer<typeof classificationReviewCreateSchema>;
 export type ClassificationResolutionCreateInput = z.infer<typeof classificationResolutionCreateSchema>;
+const candidateFilterRuleSchema = z.object({
+  value: z.string().trim().min(1).max(500),
+  mode: z.enum(["contains", "word", "exact", "regex"]).default("contains"),
+  target: z.enum(["title", "category", "both"]).default("both"),
+  enabled: z.boolean().optional(),
+  reason: z.string().trim().min(1).max(500).optional()
+}).strict().superRefine((input, context) => {
+  if (input.mode !== "regex") return;
+  try {
+    new RegExp(input.value, "iu");
+  } catch {
+    context.addIssue({ code: "custom", path: ["value"], message: "Invalid candidate filter regex" });
+  }
+});
 const newsSourceConfigSchema = z.object({
   fetchArticleContent: z.boolean().optional(),
   dateField: z.enum(["pubDate", "dc:date", "updated", "published"]).optional(),
@@ -603,7 +629,11 @@ const newsSourceConfigSchema = z.object({
   allowFutureEvents: z.boolean().optional(),
   query: z.string().trim().min(1).optional(),
   section: z.string().trim().min(1).optional(),
-  pageSize: z.number().int().min(1).max(200).optional()
+  pageSize: z.number().int().min(1).max(200).optional(),
+  candidateFilters: z.object({
+    whitelist: z.array(candidateFilterRuleSchema).max(200).optional(),
+    blacklist: z.array(candidateFilterRuleSchema).max(200).optional()
+  }).strict().optional()
 }).strict();
 const newsSourceBaseSchema = z.object({
   slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),

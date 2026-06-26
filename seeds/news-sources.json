@@ -82,7 +82,171 @@
     "region": "global",
     "accessTier": "free",
     "disabledReason": "Disabled pending explicit rollout",
-    "config": { "fetchArticleContent": true }
+    "config": {
+      "fetchArticleContent": true,
+      "candidateFilters": {
+        "whitelist": [
+          {
+            "value": "tax",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve fiscal policy stories even when a blacklist term also appears"
+          },
+          {
+            "value": "oil",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve energy price and commodity stories"
+          },
+          {
+            "value": "energy bill",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Preserve household energy-cost stories"
+          },
+          {
+            "value": "economy",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve explicitly macroeconomic stories"
+          },
+          {
+            "value": "economic",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve explicitly macroeconomic stories"
+          },
+          {
+            "value": "chancellor",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve UK fiscal and budget leadership stories"
+          },
+          {
+            "value": "Brexit",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve UK trade and economic-impact stories"
+          },
+          {
+            "value": "jobs",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve labor-market stories"
+          },
+          {
+            "value": "debt",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve household or public-debt stories"
+          },
+          {
+            "value": "prices",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve inflation and price-pressure stories"
+          }
+        ],
+        "blacklist": [
+          {
+            "value": "holiday",
+            "mode": "word",
+            "target": "title",
+            "reason": "Travel/consumer-service noise in the business feed"
+          },
+          {
+            "value": "holidays",
+            "mode": "word",
+            "target": "title",
+            "reason": "Travel/consumer-service noise in the business feed"
+          },
+          {
+            "value": "flight",
+            "mode": "word",
+            "target": "title",
+            "reason": "Air-travel operational noise"
+          },
+          {
+            "value": "flights",
+            "mode": "word",
+            "target": "title",
+            "reason": "Air-travel operational noise"
+          },
+          {
+            "value": "airport",
+            "mode": "word",
+            "target": "title",
+            "reason": "Air-travel operational noise"
+          },
+          {
+            "value": "airports",
+            "mode": "word",
+            "target": "title",
+            "reason": "Air-travel operational noise"
+          },
+          {
+            "value": "Ryanair",
+            "mode": "word",
+            "target": "title",
+            "reason": "Airline service noise unless whitelisted by macro terms"
+          },
+          {
+            "value": "EasyJet",
+            "mode": "word",
+            "target": "title",
+            "reason": "Airline service noise unless whitelisted by macro terms"
+          },
+          {
+            "value": "GTA",
+            "mode": "word",
+            "target": "title",
+            "reason": "Entertainment/gaming noise"
+          },
+          {
+            "value": "game",
+            "mode": "word",
+            "target": "title",
+            "reason": "Entertainment/gaming noise"
+          },
+          {
+            "value": "university degrees",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Personal-career explainer noise"
+          },
+          {
+            "value": "social media addiction",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Legal/consumer-tech story outside macro scope"
+          },
+          {
+            "value": "power bank",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Consumer safety/travel noise"
+          },
+          {
+            "value": "train passed red signal",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Transport incident noise"
+          },
+          {
+            "value": "moving back home",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Lifestyle/personal finance noise"
+          },
+          {
+            "value": "Rethink",
+            "mode": "exact",
+            "target": "title",
+            "reason": "BBC audio programme item, not a news headline"
+          }
+        ]
+      }
+    }
   },
   {
     "slug": "agencia-brasil-economia",
@@ -96,7 +260,171 @@
     "region": "BR",
     "accessTier": "free",
     "disabledReason": "Disabled pending explicit rollout",
-    "config": { "fetchArticleContent": true }
+    "config": {
+      "fetchArticleContent": true,
+      "candidateFilters": {
+        "whitelist": [
+          {
+            "value": "Dólar",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve FX-market stories"
+          },
+          {
+            "value": "câmbio",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve FX-market stories"
+          },
+          {
+            "value": "Selic",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve monetary-policy stories"
+          },
+          {
+            "value": "Copom",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve monetary-policy stories"
+          },
+          {
+            "value": "Banco Central",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Preserve central-bank stories"
+          },
+          {
+            "value": "inflação",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve inflation stories"
+          },
+          {
+            "value": "IPCA",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve Brazilian inflation indicator stories"
+          },
+          {
+            "value": "PIB",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve GDP stories"
+          },
+          {
+            "value": "arrecadação",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve fiscal revenue stories"
+          },
+          {
+            "value": "Tesouro",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve public-debt and treasury stories"
+          },
+          {
+            "value": "Fazenda",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve fiscal-policy stories"
+          },
+          {
+            "value": "Receita",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve tax-authority stories"
+          },
+          {
+            "value": "mercado de trabalho",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Preserve labor-market stories"
+          },
+          {
+            "value": "emprego",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve labor-market stories"
+          },
+          {
+            "value": "crédito",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve credit-market stories"
+          },
+          {
+            "value": "tarifas",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve trade and tariff stories"
+          },
+          {
+            "value": "Petrobras",
+            "mode": "word",
+            "target": "title",
+            "reason": "Preserve energy and state-company stories"
+          }
+        ],
+        "blacklist": [
+          {
+            "value": "Bolsa Família",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Recurring social-benefit payment schedule noise"
+          },
+          {
+            "value": "NIS",
+            "mode": "word",
+            "target": "title",
+            "reason": "Recurring social-benefit payment schedule noise"
+          },
+          {
+            "value": "beneficiários",
+            "mode": "word",
+            "target": "title",
+            "reason": "Recurring benefit-payment operational headline"
+          },
+          {
+            "value": "apostas",
+            "mode": "word",
+            "target": "title",
+            "reason": "Sports-betting operational/regulatory noise unless whitelisted"
+          },
+          {
+            "value": "bet",
+            "mode": "word",
+            "target": "title",
+            "reason": "Sports-betting operational/regulatory noise unless whitelisted"
+          },
+          {
+            "value": "bets",
+            "mode": "word",
+            "target": "title",
+            "reason": "Sports-betting operational/regulatory noise unless whitelisted"
+          },
+          {
+            "value": "CazéTV",
+            "mode": "word",
+            "target": "title",
+            "reason": "Sports/advertising operational noise"
+          },
+          {
+            "value": "Copa do Mundo",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Sports-event noise unless whitelisted"
+          },
+          {
+            "value": "grandes eventos",
+            "mode": "contains",
+            "target": "title",
+            "reason": "Event-labor story outside core macro feed"
+          }
+        ]
+      }
+    }
   },
   {
     "slug": "euronews-business",
@@ -125,7 +453,9 @@
     "accessTier": "api-key",
     "secretRef": "ALPHA_VANTAGE_API_KEY",
     "disabledReason": "Coverage and quota benchmark required",
-    "config": { "query": "economy_macro" }
+    "config": {
+      "query": "economy_macro"
+    }
   },
   {
     "slug": "gdelt-doc",
@@ -139,7 +469,9 @@
     "region": "global",
     "accessTier": "free",
     "disabledReason": "Rate-limit and quality benchmark required",
-    "config": { "query": "economy" }
+    "config": {
+      "query": "economy"
+    }
   },
   {
     "slug": "yahoo-finance",
@@ -153,7 +485,10 @@
     "region": "global",
     "accessTier": "free",
     "disabledReason": "Noisy general feed; enable only with downstream filtering",
-    "config": { "fetchArticleContent": true, "dateField": "dc:date" }
+    "config": {
+      "fetchArticleContent": true,
+      "dateField": "dc:date"
+    }
   },
   {
     "slug": "marketwatch-top-stories",
@@ -268,7 +603,10 @@
     "region": "EU/global",
     "accessTier": "free",
     "disabledReason": "Supporting European public-media source",
-    "config": { "fetchArticleContent": true, "dateField": "dc:date" }
+    "config": {
+      "fetchArticleContent": true,
+      "dateField": "dc:date"
+    }
   },
   {
     "slug": "france24-business-tech",
@@ -324,7 +662,9 @@
     "region": "US/global",
     "accessTier": "undocumented-free",
     "disabledReason": "Undocumented fallback discovery source, not a source of record",
-    "config": { "fetchArticleContent": false }
+    "config": {
+      "fetchArticleContent": false
+    }
   },
   {
     "slug": "reuters-commercial",

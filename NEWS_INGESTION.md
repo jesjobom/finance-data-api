@@ -10,6 +10,62 @@ The default overlap is two hours. RSS, Atom, and RDF feeds are filtered locally.
 Guardian receives the same interval through native date parameters. The
 successful watermark advances only after all accepted items persist.
 
+## Source candidate filters
+
+Source config may include optional `candidateFilters.whitelist` and
+`candidateFilters.blacklist` arrays. When no filters are configured, collection
+behavior is unchanged and every structurally valid candidate continues through
+deduplication and persistence.
+
+Filters match normalized candidate `title` and `category` values. Supported
+rule modes are `contains`, `word`, `exact`, and `regex`; prefer non-regex modes
+unless a source needs a pattern that plain terms cannot express. Regex rules
+are validated when the source is saved or seeded.
+
+Whitelist rules take precedence over blacklist rules. A candidate matching a
+whitelist rule is accepted even if it also matches a blacklist rule. A
+candidate matching only a blacklist rule is rejected and the collection run
+records a bounded diagnostic.
+
+Noisy-source blacklist example:
+
+```json
+{
+  "candidateFilters": {
+    "blacklist": [
+      { "value": "opinion", "mode": "exact", "target": "category", "reason": "exclude commentary feed items" }
+    ]
+  }
+}
+```
+
+Curated-source whitelist plus blacklist example:
+
+```json
+{
+  "candidateFilters": {
+    "whitelist": [
+      { "value": "central bank", "mode": "contains", "target": "title" }
+    ],
+    "blacklist": [
+      { "value": "opinion", "mode": "exact", "target": "category" }
+    ]
+  }
+}
+```
+
+Regex escape-hatch example:
+
+```json
+{
+  "candidateFilters": {
+    "blacklist": [
+      { "value": "\\bcrypto(?:currency)?\\b", "mode": "regex", "target": "title" }
+    ]
+  }
+}
+```
+
 ## Scheduling
 
 Call `POST /v1/news-collection-runs` with `{"mode":"due"}` from an external

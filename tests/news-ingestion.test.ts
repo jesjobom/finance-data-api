@@ -89,6 +89,69 @@ describe("news collection", () => {
     expect(store.listNews()).toHaveLength(1);
   });
 
+  it("applies per-source candidate filters with whitelist precedence", async () => {
+    const store = new FinanceStore();
+    const registered = store.createNewsSource(source({
+      config: {
+        candidateFilters: {
+          whitelist: [{ value: "central bank", mode: "contains", target: "title" }],
+          blacklist: [{ value: "opinion", mode: "exact", target: "category" }]
+        }
+      }
+    }));
+    const xml = `<?xml version="1.0"?><rss><channel>
+      <item><guid>blocked</guid><title>Market opinion column</title><category>opinion</category>
+      <pubDate>Sun, 21 Jun 2026 11:00:00 GMT</pubDate></item>
+      <item><guid>allowed-by-whitelist</guid><title>Central Bank opinion update</title><category>opinion</category>
+      <pubDate>Sun, 21 Jun 2026 11:05:00 GMT</pubDate></item>
+      <item><guid>allowed-by-default</guid><title>Inflation data released</title><category>macro</category>
+      <pubDate>Sun, 21 Jun 2026 11:10:00 GMT</pubDate></item>
+    </channel></rss>`;
+    const collector = new NewsCollectionService(store, {
+      fetchImpl: (async () => new Response(xml, { headers: { "content-type": "application/rss+xml" } })) as typeof fetch,
+      now: () => NOW
+    });
+
+    const run = await collector.collectSource(registered.id, { trigger: "manual" });
+
+    expect("status" in run && run.status).toBe("partial");
+    expect("counts" in run && run.counts).toMatchObject({ fetched: 3, accepted: 2, created: 2, rejected: 1 });
+    expect(store.listNews().map((item) => item.externalId).sort()).toEqual(["allowed-by-default", "allowed-by-whitelist"]);
+    expect("diagnostics" in run && run.diagnostics).toContainEqual(expect.stringContaining("candidate filtered by blacklist"));
+  });
+
+  it("supports word, regex, disabled, and accent-insensitive filter rules", async () => {
+    const store = new FinanceStore();
+    const registered = store.createNewsSource(source({
+      config: {
+        candidateFilters: {
+          whitelist: [{ value: "selic", mode: "regex", target: "title" }],
+          blacklist: [
+            { value: "café", mode: "word", target: "title" },
+            { value: "ignored", mode: "contains", target: "title", enabled: false }
+          ]
+        }
+      }
+    }));
+    const xml = `<?xml version="1.0"?><rss><channel>
+      <item><guid>accent-blocked</guid><title>Cafe prices rise</title>
+      <pubDate>Sun, 21 Jun 2026 11:00:00 GMT</pubDate></item>
+      <item><guid>regex-allowed</guid><title>SELIC cafe update</title>
+      <pubDate>Sun, 21 Jun 2026 11:05:00 GMT</pubDate></item>
+      <item><guid>disabled-rule</guid><title>Ignored keyword story</title>
+      <pubDate>Sun, 21 Jun 2026 11:10:00 GMT</pubDate></item>
+    </channel></rss>`;
+    const collector = new NewsCollectionService(store, {
+      fetchImpl: (async () => new Response(xml, { headers: { "content-type": "application/rss+xml" } })) as typeof fetch,
+      now: () => NOW
+    });
+
+    const run = await collector.collectSource(registered.id, { trigger: "manual" });
+
+    expect("counts" in run && run.counts).toMatchObject({ accepted: 2, rejected: 1 });
+    expect(store.listNews().map((item) => item.externalId).sort()).toEqual(["disabled-rule", "regex-allowed"]);
+  });
+
   it("isolates failures between sources", async () => {
     const store = new FinanceStore();
     const good = store.createNewsSource(source({ slug: "good-source", endpoint: "https://good.example.com/feed.xml" }));
@@ -224,9 +287,13 @@ describe("news source API and seed", () => {
     });
     const { app } = buildApp({ store, newsCollector: collector, config: { port: 0, apiToken: "token" } });
     const auth = { authorization: "Bearer token" };
-    const created = await app.inject({ method: "POST", url: "/v1/news-sources", headers: auth, payload: source() });
+    const sourcePayload = source({
+      config: { candidateFilters: { blacklist: [{ value: "opinion", mode: "exact", target: "category", reason: "noise" }] } }
+    });
+    const created = await app.inject({ method: "POST", url: "/v1/news-sources", headers: auth, payload: sourcePayload });
     expect(created.statusCode).toBe(201);
     const createdSource = created.json();
+    expect(createdSource.config.candidateFilters.blacklist[0]).toMatchObject({ value: "opinion", mode: "exact", target: "category" });
     const patched = await app.inject({
       method: "PATCH", url: `/v1/news-sources/${createdSource.id}`, headers: auth, payload: { enabled: false }
     });
@@ -257,6 +324,7 @@ describe("news source API and seed", () => {
     expect(() => source({ endpoint: "file:///tmp/feed.xml" })).toThrow();
     expect(() => source({ adapterType: "guardian", secretRef: undefined })).toThrow(/secret reference/);
     expect(() => source({ config: { executableTransform: "return input" } })).toThrow();
+    expect(() => source({ config: { candidateFilters: { blacklist: [{ value: "[" , mode: "regex" }] } } })).toThrow(/regex/);
 
     const directory = await mkdtemp(join(tmpdir(), "news-seed-"));
     const path = join(directory, "sources.json");

@@ -239,7 +239,27 @@ export const openApiDocument: OpenAPIV3.Document = {
           allowFutureEvents: { type: "boolean" },
           query: { type: "string" },
           section: { type: "string" },
-          pageSize: { type: "integer", minimum: 1, maximum: 200 }
+          pageSize: { type: "integer", minimum: 1, maximum: 200 },
+          candidateFilters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              whitelist: { type: "array", maxItems: 200, items: ref("NewsSourceCandidateFilterRule") },
+              blacklist: { type: "array", maxItems: 200, items: ref("NewsSourceCandidateFilterRule") }
+            }
+          }
+        }
+      },
+      NewsSourceCandidateFilterRule: {
+        type: "object",
+        required: ["value"],
+        additionalProperties: false,
+        properties: {
+          value: { type: "string", minLength: 1, maxLength: 500 },
+          mode: { type: "string", enum: ["contains", "word", "exact", "regex"], default: "contains" },
+          target: { type: "string", enum: ["title", "category", "both"], default: "both" },
+          enabled: { type: "boolean", default: true },
+          reason: { type: "string", minLength: 1, maxLength: 500 }
         }
       },
       NewsSourceCreate: {

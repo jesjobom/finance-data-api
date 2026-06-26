@@ -7,6 +7,7 @@ import {
   type NewsCollectionTrigger,
   type NewsItem,
   type NewsSource,
+  type NewsSourceCandidateFilterRule,
   type NewsSourceState
 } from "./domain.js";
 import { validation } from "./errors.js";
@@ -196,8 +197,15 @@ export class NewsCollectionService {
       if (source.secretRef && !secret) throw validation("Configured source secret is unavailable", { secretRef: source.secretRef });
       const result = await this.adapter(source.adapterType)({ source, state, window, http: this.http, secret });
       const counts = { ...EMPTY_COUNTS(), fetched: result.fetched, rejected: result.rejected, articleFailures: result.articleFailures };
+      const filterDiagnostics: string[] = [];
       let latest = state.latestItemAt;
       for (const candidate of result.candidates) {
+        const filterDecision = evaluateCandidateFilters(source, candidate);
+        if (filterDecision.rejected) {
+          counts.rejected++;
+          filterDiagnostics.push(filterDecision.diagnostic);
+          continue;
+        }
         counts.accepted++;
         const normalized = normalizeCandidate(source, candidate, startedAt);
         const persisted = await this.store.upsertCollectedNews(normalized);
@@ -207,7 +215,7 @@ export class NewsCollectionService {
         if (!latest || candidate.publishedAt > latest) latest = candidate.publishedAt;
       }
       const completedAt = this.now();
-      const status = result.notModified ? "no_change" : result.articleFailures || result.rejected ? "partial" : "success";
+      const status = result.notModified ? "no_change" : counts.articleFailures || counts.rejected ? "partial" : "success";
       await this.store.setNewsSourceState(source.id, {
         watermark: window.to, etag: result.etag ?? state.etag, lastModified: result.lastModified ?? state.lastModified,
         latestItemAt: latest, lastAttemptAt: startedAt, lastSuccessAt: completedAt, consecutiveFailures: 0,
@@ -215,7 +223,7 @@ export class NewsCollectionService {
         lastErrorCode: undefined
       });
       run = await this.store.updateNewsCollectionRun(run.id, {
-        status, completedAt, counts, diagnostics: [...diagnostics, ...result.diagnostics]
+        status, completedAt, counts, diagnostics: [...diagnostics, ...result.diagnostics, ...filterDiagnostics]
       });
       return run;
     } catch (error) {
@@ -343,6 +351,60 @@ Omit<NewsItem, "id" | "createdAt" | "updatedAt" | "processedAt" | "processedBy" 
     retrievedAt, language: candidate.language ?? source.language, region: candidate.region ?? source.region,
     topicTags: candidate.topicTags, rawHash, duplicateGroup: canonicalUrl ? hash(canonicalUrl) : rawHash, relatedInvestmentIds: []
   };
+}
+
+function evaluateCandidateFilters(source: NewsSource, candidate: NewsCandidate):
+{ rejected: false } | { rejected: true; diagnostic: string } {
+  const whitelist = enabledRules(source.config.candidateFilters?.whitelist);
+  const blacklist = enabledRules(source.config.candidateFilters?.blacklist);
+  if (!whitelist.length && !blacklist.length) return { rejected: false };
+  if (whitelist.some((rule) => ruleMatches(rule, candidate))) return { rejected: false };
+  const matchedBlacklist = blacklist.find((rule) => ruleMatches(rule, candidate));
+  if (!matchedBlacklist) return { rejected: false };
+  return {
+    rejected: true,
+    diagnostic: `candidate filtered by blacklist source=${source.slug} target=${matchedBlacklist.target} mode=${matchedBlacklist.mode} value=${bounded(matchedBlacklist.value, 80)} candidate=${candidateIdentity(candidate)}`
+  };
+}
+
+function enabledRules(rules: NewsSourceCandidateFilterRule[] | undefined): NewsSourceCandidateFilterRule[] {
+  return (rules ?? []).filter((rule) => rule.enabled !== false);
+}
+
+function ruleMatches(rule: NewsSourceCandidateFilterRule, candidate: NewsCandidate): boolean {
+  return targetTexts(rule.target, candidate).some((value) => matchText(rule, normalizeFilterText(value)));
+}
+
+function targetTexts(target: NewsSourceCandidateFilterRule["target"], candidate: NewsCandidate): string[] {
+  const values: string[] = [];
+  if (target === "title" || target === "both") values.push(candidate.title);
+  if (target === "category" || target === "both") values.push(...candidate.topicTags);
+  return values;
+}
+
+function matchText(rule: NewsSourceCandidateFilterRule, textValue: string): boolean {
+  const ruleValue = normalizeFilterText(rule.value);
+  if (!ruleValue) return false;
+  if (rule.mode === "contains") return textValue.includes(ruleValue);
+  if (rule.mode === "exact") return textValue === ruleValue;
+  if (rule.mode === "word") return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRegExp(ruleValue)}(?:$|[^\\p{L}\\p{N}])`, "u").test(textValue);
+  return new RegExp(rule.value, "iu").test(textValue);
+}
+
+function normalizeFilterText(value: string): string {
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim().replace(/\s+/g, " ").slice(0, 1000);
+}
+
+function candidateIdentity(candidate: NewsCandidate): string {
+  return bounded(candidate.externalId ?? candidate.canonicalUrl ?? candidate.url ?? hash(`${candidate.title}\n${candidate.publishedAt}`).slice(0, 16), 120);
+}
+
+function bounded(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function feedItems(parsed: any): any[] {
