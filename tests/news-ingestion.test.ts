@@ -66,6 +66,29 @@ describe("news collection", () => {
     expect(store.listNews()).toHaveLength(1);
   });
 
+  it("deduplicates republishes with a changed external id but the same canonical URL", async () => {
+    const store = new FinanceStore();
+    const registered = store.createNewsSource(source());
+    const fetchImpl = async () => new Response(`<?xml version="1.0"?><rss><channel>
+      <item><guid>story-republished</guid><title>Fresh story updated</title><link>https://news.example.com/a?utm_source=newsletter</link>
+      <description><![CDATA[<p>Updated summary</p>]]></description><pubDate>Sun, 21 Jun 2026 11:00:00 GMT</pubDate></item>
+    </channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
+    const collector = new NewsCollectionService(store, { fetchImpl: fetchImpl as typeof fetch, now: () => NOW });
+
+    store.upsertCollectedNews({
+      source: registered.name, sourceId: registered.id, externalId: "story-original",
+      url: "https://news.example.com/a", canonicalUrl: "https://news.example.com/a",
+      title: "Fresh story", publishedAt: "2026-06-21T11:00:00.000Z", retrievedAt: NOW,
+      language: "en", region: "global", topicTags: [], rawHash: "original-hash",
+      duplicateGroup: "same-story", relatedInvestmentIds: []
+    });
+
+    const run = await collector.collectSource(registered.id, { trigger: "manual" });
+
+    expect("counts" in run && run.counts).toMatchObject({ accepted: 1, enriched: 1 });
+    expect(store.listNews()).toHaveLength(1);
+  });
+
   it("isolates failures between sources", async () => {
     const store = new FinanceStore();
     const good = store.createNewsSource(source({ slug: "good-source", endpoint: "https://good.example.com/feed.xml" }));

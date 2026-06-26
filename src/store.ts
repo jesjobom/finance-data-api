@@ -513,8 +513,8 @@ export class FinanceStore {
     const relatedInvestmentIds = input.relatedInvestmentIds ?? [];
     const existing = [...this.news.values()].find((item) => item.sourceId === input.sourceId && (
       (input.externalId && item.externalId === input.externalId) ||
-      (!input.externalId && input.canonicalUrl && item.canonicalUrl === input.canonicalUrl) ||
-      (!input.externalId && !input.canonicalUrl && input.rawHash && item.rawHash === input.rawHash)
+      (input.canonicalUrl && item.canonicalUrl === input.canonicalUrl) ||
+      (!input.canonicalUrl && input.rawHash && item.rawHash === input.rawHash)
     ));
     if (!existing) return { item: this.createNews({ ...input, relatedInvestmentIds }), result: "created" };
     const richer = (!existing.body && input.body) || (!existing.summary && input.summary);
@@ -624,10 +624,19 @@ export class FinanceStore {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
   classificationQueue(kind: "unclassified" | "unreviewed" | "needs_revision", limit = 100): Array<NewsItem | NewsClassification> {
-    const current = this.listNewsClassifications({ current: true, limit: 200 }).items;
+    const superseded = new Set([...this.newsClassifications.values()].map((item) => item.supersedesClassificationId).filter(Boolean));
+    const current = [...this.newsClassifications.values()]
+      .filter((item) => !superseded.has(item.id))
+      .sort((a, b) => this.getNews(b.newsId).publishedAt.localeCompare(this.getNews(a.newsId).publishedAt) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     if (kind === "unclassified") {
       const classified = new Set(current.map((item) => item.newsId));
-      return this.listNews().filter((item) => !classified.has(item.id)).slice(0, limit);
+      const classifiedDuplicateGroups = new Set(
+        current.map((item) => this.getNews(item.newsId).duplicateGroup).filter((group): group is string => Boolean(group))
+      );
+      return this.listNews()
+        .filter((item) => !classified.has(item.id))
+        .filter((item) => !item.duplicateGroup || !classifiedDuplicateGroups.has(item.duplicateGroup))
+        .slice(0, limit);
     }
     return current.filter((item) => {
       const review = this.effectiveClassificationReview(item.id)?.decision;

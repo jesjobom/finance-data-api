@@ -158,4 +158,25 @@ describe("store edge cases", () => {
     expect(store.classificationQueue("needs_revision")).toEqual([]);
     expect(store.classificationQueue("unreviewed")).toEqual([]);
   });
+
+  it("does not treat classified news beyond the first classification page as unclassified", () => {
+    const store = new FinanceStore();
+    const olderClassifiedNews = createNews(store, "Older classified");
+    store.createNewsClassification(olderClassifiedNews.id, classification());
+
+    for (let index = 0; index < 205; index++) {
+      const news = store.createNews({
+        source: "unit",
+        title: `Newer classified ${index}`,
+        publishedAt: `2026-06-22T${String(Math.floor(index / 10)).padStart(2, "0")}:${String(index % 10).padStart(2, "0")}:00.000Z`,
+        topicTags: [],
+        relatedInvestmentIds: []
+      });
+      store.createNewsClassification(news.id, classification({ externalRunId: `run-newer-${index}` }));
+    }
+
+    const trulyUnclassified = createNews(store, "Actually unclassified");
+
+    expect(store.classificationQueue("unclassified", 300).map((item) => item.id)).toEqual([trulyUnclassified.id]);
+  });
 });

@@ -116,6 +116,33 @@ describe("news classification API", () => {
     expect(pending.json().classificationReviews).toContainEqual({ id: created.json().id, newsId: news.id });
   });
 
+  it("keeps duplicate news groups out of the unclassified queue after one item is classified", async () => {
+    const ctx = testApp();
+    const first = await ctx.app.inject({
+      method: "POST", url: "/v1/news", headers: ctx.auth,
+      payload: {
+        source: "source-a", title: "Same macro event", publishedAt: "2026-06-21T12:00:00.000Z",
+        duplicateGroup: "macro-event-1"
+      }
+    });
+    const duplicate = await ctx.app.inject({
+      method: "POST", url: "/v1/news", headers: ctx.auth,
+      payload: {
+        source: "source-b", title: "Same macro event republished", publishedAt: "2026-06-21T13:00:00.000Z",
+        duplicateGroup: "macro-event-1"
+      }
+    });
+    await ctx.app.inject({
+      method: "POST", url: `/v1/news/${first.json().id}/classifications`, headers: ctx.auth, payload: classification()
+    });
+
+    const queue = await ctx.app.inject({
+      method: "GET", url: "/v1/news-classification-queue?kind=unclassified", headers: ctx.auth
+    });
+
+    expect(queue.json().map((item: any) => item.id)).not.toContain(duplicate.json().id);
+  });
+
   it("rejects recommendation-like and unknown fields", async () => {
     const ctx = testApp();
     const news = await createNews(ctx);
