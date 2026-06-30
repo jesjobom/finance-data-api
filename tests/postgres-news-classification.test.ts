@@ -35,7 +35,7 @@ describe("PostgreSQL news classification persistence", () => {
           direction: "uncertain", magnitude: "unknown", confidence: 0.5, rationale: "Indirect effect", evidenceKeys: ["macro"]
         }]
       });
-      expect((await observer.classificationQueue("unclassified")).map((item) => item.id)).toContain(news.id);
+      expect((await observer.classificationQueue("unclassified")).map((item: any) => item.primaryNews.id)).toContain(news.id);
       const created = await observer.createNewsClassification(news.id, input);
       expect((await store.createNewsClassification(news.id, input)).result).toBe("replayed");
       await store.addClassificationReview(created.classification.id, {

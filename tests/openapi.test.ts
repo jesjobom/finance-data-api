@@ -73,6 +73,8 @@ describe("openapi route coverage", () => {
       "/v1/news-classifications",
       "/v1/news-classifications/{id}",
       "/v1/news-classifications/{id}/reviews",
+      "/v1/news-stories",
+      "/v1/news-stories/{id}",
       "/v1/news/{id}",
       "/v1/news/{id}/classifications",
       "/v1/news/{id}/process",

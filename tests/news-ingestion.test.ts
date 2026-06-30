@@ -89,6 +89,59 @@ describe("news collection", () => {
     expect(store.listNews()).toHaveLength(1);
   });
 
+  it("groups same-day cross-source stories by semantic event without deleting mentions", async () => {
+    const store = new FinanceStore();
+    store.createNews({
+      source: "BBC", title: "Supreme Court blocks Trump's attempt to fire Federal Reserve governor Lisa Cook",
+      summary: "Lisa Cook remains at the Federal Reserve for now.", publishedAt: "2026-06-21T12:00:00.000Z",
+      topicTags: [], relatedInvestmentIds: []
+    });
+    store.createNews({
+      source: "Bloomberg", title: "Supreme Court Thwarts Trump Bid to Oust Fed's Cook for Now",
+      summary: "The Fed governor can stay in job while the case proceeds.", publishedAt: "2026-06-21T13:00:00.000Z",
+      topicTags: [], relatedInvestmentIds: []
+    });
+
+    const stories = store.listNewsStoryClusters();
+
+    expect(store.listNews()).toHaveLength(2);
+    expect(stories).toHaveLength(1);
+    expect(stories[0].sourceCount).toBe(2);
+    expect(stories[0].alsoSeenIn).toHaveLength(1);
+    expect(stories[0].mentions.some((mention) => mention.matchReason === "semantic")).toBe(true);
+  });
+
+  it("groups same-day cross-source stories by normalized canonical URL first", async () => {
+    const store = new FinanceStore();
+    store.createNews({
+      source: "wire-a", title: "Shared canonical story", canonicalUrl: "https://example.com/story?utm_source=rss",
+      publishedAt: "2026-06-21T12:00:00.000Z", topicTags: [], relatedInvestmentIds: []
+    });
+    store.createNews({
+      source: "wire-b", title: "Republished shared canonical story", canonicalUrl: "https://example.com/story",
+      publishedAt: "2026-06-21T13:00:00.000Z", topicTags: [], relatedInvestmentIds: []
+    });
+
+    const story = store.listNewsStoryClusters()[0];
+
+    expect(store.listNewsStoryClusters()).toHaveLength(1);
+    expect(story.mentions.map((mention) => mention.matchReason)).toContain("canonical_url");
+  });
+
+  it("does not semantically group similar stories across publication days", async () => {
+    const store = new FinanceStore();
+    store.createNews({
+      source: "BBC", title: "Supreme Court blocks Trump's attempt to fire Federal Reserve governor Lisa Cook",
+      publishedAt: "2026-06-21T12:00:00.000Z", topicTags: [], relatedInvestmentIds: []
+    });
+    store.createNews({
+      source: "Bloomberg", title: "Supreme Court Thwarts Trump Bid to Oust Fed's Cook for Now",
+      publishedAt: "2026-06-22T13:00:00.000Z", topicTags: [], relatedInvestmentIds: []
+    });
+
+    expect(store.listNewsStoryClusters()).toHaveLength(2);
+  });
+
   it("applies per-source candidate filters with whitelist precedence", async () => {
     const store = new FinanceStore();
     const registered = store.createNewsSource(source({

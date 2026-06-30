@@ -76,7 +76,7 @@ describe("news classification API", () => {
     const unclassified = await ctx.app.inject({
       method: "GET", url: "/v1/news-classification-queue?kind=unclassified", headers: ctx.auth
     });
-    expect(unclassified.json().map((item: any) => item.id)).toContain(news.id);
+    expect(unclassified.json().map((item: any) => item.primaryNews.id)).toContain(news.id);
 
     const created = await ctx.app.inject({
       method: "POST", url: `/v1/news/${news.id}/classifications`, headers: ctx.auth,
@@ -116,20 +116,22 @@ describe("news classification API", () => {
     expect(pending.json().classificationReviews).toContainEqual({ id: created.json().id, newsId: news.id });
   });
 
-  it("keeps duplicate news groups out of the unclassified queue after one item is classified", async () => {
+  it("keeps clustered duplicate news out of the unclassified queue after one mention is classified", async () => {
     const ctx = testApp();
     const first = await ctx.app.inject({
       method: "POST", url: "/v1/news", headers: ctx.auth,
       payload: {
-        source: "source-a", title: "Same macro event", publishedAt: "2026-06-21T12:00:00.000Z",
-        duplicateGroup: "macro-event-1"
+        source: "source-a", title: "Supreme Court blocks Trump attempt to fire Fed governor Lisa Cook",
+        summary: "Lisa Cook remains in her Federal Reserve role for now.",
+        publishedAt: "2026-06-21T12:00:00.000Z"
       }
     });
     const duplicate = await ctx.app.inject({
       method: "POST", url: "/v1/news", headers: ctx.auth,
       payload: {
-        source: "source-b", title: "Same macro event republished", publishedAt: "2026-06-21T13:00:00.000Z",
-        duplicateGroup: "macro-event-1"
+        source: "source-b", title: "Supreme Court thwarts Trump bid to oust Fed's Lisa Cook for now",
+        summary: "The Federal Reserve governor can stay in the job while the dispute proceeds.",
+        publishedAt: "2026-06-21T13:00:00.000Z"
       }
     });
     await ctx.app.inject({
@@ -140,7 +142,43 @@ describe("news classification API", () => {
       method: "GET", url: "/v1/news-classification-queue?kind=unclassified", headers: ctx.auth
     });
 
-    expect(queue.json().map((item: any) => item.id)).not.toContain(duplicate.json().id);
+    expect(queue.json().flatMap((story: any) => [story.primaryNews.id, ...story.alsoSeenIn.map((item: any) => item.id)])).not.toContain(duplicate.json().id);
+    const story = await ctx.app.inject({ method: "GET", url: "/v1/news-stories", headers: ctx.auth });
+    expect(story.json()[0]).toMatchObject({
+      sourceCount: 2,
+      classificationSource: { type: "news_item", newsId: first.json().id }
+    });
+  });
+
+  it("flags conflicting classifications across duplicate mentions for story review", async () => {
+    const ctx = testApp();
+    const first = await ctx.app.inject({
+      method: "POST", url: "/v1/news", headers: ctx.auth,
+      payload: {
+        source: "source-a", title: "Supreme Court blocks Trump attempt to fire Fed governor Lisa Cook",
+        summary: "Lisa Cook remains in her Federal Reserve role for now.",
+        publishedAt: "2026-06-21T12:00:00.000Z"
+      }
+    });
+    const second = await ctx.app.inject({
+      method: "POST", url: "/v1/news", headers: ctx.auth,
+      payload: {
+        source: "source-b", title: "Supreme Court thwarts Trump bid to oust Fed's Lisa Cook for now",
+        summary: "The Federal Reserve governor can stay in the job.",
+        publishedAt: "2026-06-21T13:00:00.000Z"
+      }
+    });
+    await ctx.app.inject({
+      method: "POST", url: `/v1/news/${first.json().id}/classifications`, headers: ctx.auth, payload: classification({ externalRunId: "run-a", importance: "high" })
+    });
+    await ctx.app.inject({
+      method: "POST", url: `/v1/news/${second.json().id}/classifications`, headers: ctx.auth, payload: classification({ externalRunId: "run-b", importance: "low" })
+    });
+
+    const stories = await ctx.app.inject({ method: "GET", url: "/v1/news-stories", headers: ctx.auth });
+    expect(stories.json()[0]).toMatchObject({ status: "conflicting_classifications", classificationSource: { type: "conflict" } });
+    const pending = await ctx.app.inject({ method: "GET", url: "/v1/pending-work", headers: ctx.auth });
+    expect(pending.json().storyReviews[0]).toMatchObject({ status: "conflicting_classifications" });
   });
 
   it("rejects recommendation-like and unknown fields", async () => {

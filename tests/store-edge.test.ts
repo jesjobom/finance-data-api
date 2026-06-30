@@ -177,6 +177,6 @@ describe("store edge cases", () => {
 
     const trulyUnclassified = createNews(store, "Actually unclassified");
 
-    expect(store.classificationQueue("unclassified", 300).map((item) => item.id)).toEqual([trulyUnclassified.id]);
+    expect(store.classificationQueue("unclassified", 300).map((item: any) => item.primaryNews.id)).toEqual([trulyUnclassified.id]);
   });
 });

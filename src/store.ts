@@ -20,6 +20,9 @@ import {
   type NewsSource,
   type NewsSourceHealth,
   type NewsSourceState,
+  type NewsStoryCluster,
+  type NewsStoryClusterView,
+  type NewsStoryMention,
   type OpeningPosition,
   type Operation,
   type OperationRevision,
@@ -67,6 +70,8 @@ export class FinanceStore {
   readonly newsSources = new Map<string, NewsSource>();
   readonly newsSourceStates = new Map<string, NewsSourceState>();
   readonly newsCollectionRuns = new Map<string, NewsCollectionRun>();
+  readonly newsStoryClusters = new Map<string, NewsStoryCluster>();
+  readonly newsStoryMentions = new Map<string, NewsStoryMention>();
   readonly newsClassifications = new Map<string, NewsClassification>();
   readonly classificationReviews = new Map<string, ClassificationReview>();
   readonly classificationResolutions = new Map<string, ClassificationTargetResolution>();
@@ -412,7 +417,9 @@ export class FinanceStore {
   createNews(input: Create<NewsItem>): NewsItem {
     for (const id of input.relatedInvestmentIds) this.requireInvestment(id);
     if (input.sourceId) this.getNewsSource(input.sourceId);
-    return this.insert(this.news, "news", { ...input, topicTags: input.topicTags ?? [] });
+    const item = this.insert(this.news, "news", { ...input, topicTags: input.topicTags ?? [] });
+    this.groupNewsItem(item.id);
+    return item;
   }
   getNews(id: string): NewsItem { return this.get(this.news, "news", id); }
   updateNews(id: string, patch: Patch<NewsItem>): NewsItem {
@@ -434,6 +441,142 @@ export class FinanceStore {
       .filter((item) => !filters.investmentId || item.relatedInvestmentIds.includes(filters.investmentId))
       .filter((item) => !filters.watched || item.relatedInvestmentIds.some((id) => heldIds.has(id) || watchedIds.has(id)))
       .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt) || a.id.localeCompare(b.id));
+  }
+
+  getNewsStoryCluster(id: string): NewsStoryClusterView {
+    return this.storyView(this.get(this.newsStoryClusters, "news story cluster", id));
+  }
+  listNewsStoryClusters(filters: { date?: string; status?: NewsStoryCluster["status"]; unclassified?: boolean; limit?: number } = {}): NewsStoryClusterView[] {
+    return [...this.newsStoryClusters.values()]
+      .map((cluster) => this.refreshStoryClassificationState(cluster.id))
+      .filter((cluster) => !filters.date || cluster.publicationDate === filters.date)
+      .filter((cluster) => !filters.status || cluster.status === filters.status)
+      .map((cluster) => this.storyView(cluster))
+      .filter((cluster) => !filters.unclassified || cluster.classificationSource.type === "none")
+      .sort((a, b) => b.primaryNews.publishedAt.localeCompare(a.primaryNews.publishedAt) || a.id.localeCompare(b.id))
+      .slice(0, filters.limit ?? 100);
+  }
+  groupNewsItem(newsId: string): NewsStoryClusterView {
+    const item = this.getNews(newsId);
+    const existing = this.storyMentionForNews(newsId);
+    if (existing) return this.storyView(this.get(this.newsStoryClusters, "news story cluster", existing.storyId));
+
+    const match = this.findStoryMatch(item);
+    const story = match ? this.linkNewsToStory(item, match.story, match.reason, match.confidence, match.diagnostics) : this.createSingleItemStory(item);
+    return this.storyView(story);
+  }
+  groupNewsItems(newsIds: string[]): NewsStoryClusterView[] {
+    return newsIds.map((id) => this.groupNewsItem(id));
+  }
+
+  private createSingleItemStory(item: NewsItem): NewsStoryCluster {
+    const story = this.insert(this.newsStoryClusters, "story", {
+      publicationDate: storyDate(item), title: item.title, summary: item.summary, primaryNewsId: item.id,
+      canonicalUrl: item.canonicalUrl, semanticKey: semanticKey(item), status: "active",
+      classificationSource: { type: "none" as const }
+    });
+    this.insert(this.newsStoryMentions, "mention", {
+      storyId: story.id, newsId: item.id, sourceId: item.sourceId, matchReason: "backfill",
+      confidence: 1, isPrimary: true, diagnostics: []
+    });
+    return this.refreshStoryClassificationState(story.id);
+  }
+  private linkNewsToStory(item: NewsItem, story: NewsStoryCluster, matchReason: NewsStoryMention["matchReason"], confidence: number, diagnostics: string[]): NewsStoryCluster {
+    const previousMaxContent = Math.max(0, ...this.storyMentions(story.id).map((mention) => contentWeight(this.getNews(mention.newsId))));
+    this.insert(this.newsStoryMentions, "mention", {
+      storyId: story.id, newsId: item.id, sourceId: item.sourceId, matchReason, confidence, isPrimary: false, diagnostics
+    });
+    const updated = this.reselectPrimaryMention(story.id);
+    const refreshed = this.refreshStoryClassificationState(updated.id);
+    if (refreshed.classificationSource?.type !== "none" && contentWeight(item) > previousMaxContent * 1.25) {
+      return this.update(this.newsStoryClusters, "news story cluster", updated.id, {
+        status: "needs_review", reviewReason: "new_richer_duplicate_evidence"
+      });
+    }
+    return refreshed;
+  }
+  private findStoryMatch(item: NewsItem): { story: NewsStoryCluster; reason: NewsStoryMention["matchReason"]; confidence: number; diagnostics: string[] } | undefined {
+    const candidates = this.sameDayCrossSourceStories(item);
+    const canonical = normalizeStoryUrl(item.canonicalUrl ?? item.url);
+    if (canonical) {
+      const exact = candidates.find((story) => normalizeStoryUrl(story.canonicalUrl) === canonical ||
+        this.storyMentions(story.id).some((mention) => normalizeStoryUrl(this.getNews(mention.newsId).canonicalUrl ?? this.getNews(mention.newsId).url) === canonical));
+      if (exact) return { story: exact, reason: "canonical_url", confidence: 1, diagnostics: [`canonical_url=${canonical}`] };
+    }
+    const semantic = candidates
+      .map((story) => ({ story, score: semanticStoryScore(item, this.getNews(story.primaryNewsId)) }))
+      .filter((candidate) => candidate.score >= 0.55)
+      .sort((a, b) => b.score - a.score || a.story.id.localeCompare(b.story.id))[0];
+    if (!semantic) return undefined;
+    return {
+      story: semantic.story, reason: "semantic", confidence: Number(semantic.score.toFixed(4)),
+      diagnostics: [`semantic_score=${semantic.score.toFixed(4)}`, `semantic_key=${semanticKey(item)}`]
+    };
+  }
+  private sameDayCrossSourceStories(item: NewsItem): NewsStoryCluster[] {
+    return [...this.newsStoryClusters.values()].filter((story) => story.publicationDate === storyDate(item))
+      .filter((story) => this.storyMentions(story.id).some((mention) => {
+        const other = this.getNews(mention.newsId);
+        return other.sourceId ? other.sourceId !== item.sourceId : other.source !== item.source;
+      }));
+  }
+  private reselectPrimaryMention(storyId: string): NewsStoryCluster {
+    const mentions = this.storyMentions(storyId);
+    const ranked = mentions.map((mention) => ({ mention, news: this.getNews(mention.newsId), score: primaryMentionScore(this.getNews(mention.newsId), mention) }))
+      .sort((a, b) => b.score - a.score || b.news.publishedAt.localeCompare(a.news.publishedAt) || a.news.id.localeCompare(b.news.id));
+    const primary = ranked[0];
+    for (const mention of mentions) {
+      const nextPrimary = primary?.mention.id === mention.id;
+      if (mention.isPrimary !== nextPrimary) this.update(this.newsStoryMentions, "news story mention", mention.id, { isPrimary: nextPrimary });
+    }
+    const primaryNews = primary?.news ?? this.getNews(this.get(this.newsStoryClusters, "news story cluster", storyId).primaryNewsId);
+    return this.update(this.newsStoryClusters, "news story cluster", storyId, {
+      primaryNewsId: primaryNews.id, title: primaryNews.title, summary: primaryNews.summary,
+      canonicalUrl: primaryNews.canonicalUrl ?? primaryNews.url, semanticKey: semanticKey(primaryNews)
+    });
+  }
+  private storyMentionForNews(newsId: string): NewsStoryMention | undefined {
+    return [...this.newsStoryMentions.values()].find((mention) => mention.newsId === newsId);
+  }
+  private storyMentions(storyId: string): NewsStoryMention[] {
+    return [...this.newsStoryMentions.values()].filter((mention) => mention.storyId === storyId)
+      .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+  private storyView(cluster: NewsStoryCluster): NewsStoryClusterView {
+    const mentions = this.storyMentions(cluster.id);
+    const primaryMention = mentions.find((mention) => mention.isPrimary) ?? mentions[0];
+    const primaryNews = this.getNews(primaryMention?.newsId ?? cluster.primaryNewsId);
+    const alsoSeenIn = mentions.filter((mention) => mention.newsId !== primaryNews.id).map((mention) => this.getNews(mention.newsId));
+    return {
+      ...cluster, primaryNews, alsoSeenIn, mentions, sourceCount: new Set(mentions.map((mention) => mention.sourceId ?? this.getNews(mention.newsId).source)).size,
+      classificationSource: cluster.classificationSource ?? { type: "none" }
+    };
+  }
+  private refreshStoryClassificationState(storyId: string): NewsStoryCluster {
+    const cluster = this.get(this.newsStoryClusters, "news story cluster", storyId);
+    const mentions = this.storyMentions(storyId);
+    const current = currentClassifications([...this.newsClassifications.values()]);
+    const mentionClassifications = mentions.map((mention) => current.find((classification) => classification.newsId === mention.newsId)).filter((item): item is NewsClassification => Boolean(item));
+    const uniqueFingerprints = new Set(mentionClassifications.map(classificationConflictFingerprint));
+    if (uniqueFingerprints.size > 1) {
+      return this.update(this.newsStoryClusters, "news story cluster", storyId, {
+        status: "conflicting_classifications", reviewReason: "conflicting_mention_classifications",
+        classificationSource: { type: "conflict" }
+      });
+    }
+    const source = mentionClassifications[0]
+      ? { type: "news_item" as const, newsId: mentionClassifications[0].newsId, classificationId: mentionClassifications[0].id }
+      : { type: "none" as const };
+    const status = cluster.status === "conflicting_classifications" ? "active" : cluster.status;
+    const reviewReason = cluster.status === "conflicting_classifications" ? undefined : cluster.reviewReason;
+    if (cluster.status === status && cluster.reviewReason === reviewReason && JSON.stringify(cluster.classificationSource ?? { type: "none" }) === JSON.stringify(source)) {
+      return cluster;
+    }
+    return this.update(this.newsStoryClusters, "news story cluster", storyId, {
+      status: cluster.status === "conflicting_classifications" ? "active" : cluster.status,
+      reviewReason: cluster.status === "conflicting_classifications" ? undefined : cluster.reviewReason,
+      classificationSource: source
+    });
   }
 
   createNewsSource(input: Create<NewsSource>): NewsSource {
@@ -565,6 +708,8 @@ export class FinanceStore {
       evidence, targets, supersedesClassificationId: input.supersedesClassificationId
     });
     classification.targets.forEach((target) => { target.classificationId = classification.id; });
+    const mention = this.storyMentionForNews(newsId);
+    if (mention) this.refreshStoryClassificationState(mention.storyId);
     return { classification, result: "created" };
   }
   getNewsClassification(id: string): NewsClassification { return this.get(this.newsClassifications, "news classification", id); }
@@ -623,19 +768,14 @@ export class FinanceStore {
     return [...this.classificationResolutions.values()].filter((item) => item.targetId === targetId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
-  classificationQueue(kind: "unclassified" | "unreviewed" | "needs_revision", limit = 100): Array<NewsItem | NewsClassification> {
+  classificationQueue(kind: "unclassified" | "unreviewed" | "needs_revision", limit = 100): Array<NewsStoryClusterView | NewsClassification> {
     const superseded = new Set([...this.newsClassifications.values()].map((item) => item.supersedesClassificationId).filter(Boolean));
     const current = [...this.newsClassifications.values()]
       .filter((item) => !superseded.has(item.id))
       .sort((a, b) => this.getNews(b.newsId).publishedAt.localeCompare(this.getNews(a.newsId).publishedAt) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     if (kind === "unclassified") {
-      const classified = new Set(current.map((item) => item.newsId));
-      const classifiedDuplicateGroups = new Set(
-        current.map((item) => this.getNews(item.newsId).duplicateGroup).filter((group): group is string => Boolean(group))
-      );
-      return this.listNews()
-        .filter((item) => !classified.has(item.id))
-        .filter((item) => !item.duplicateGroup || !classifiedDuplicateGroups.has(item.duplicateGroup))
+      for (const item of this.listNews()) this.groupNewsItem(item.id);
+      return this.listNewsStoryClusters({ unclassified: true })
         .slice(0, limit);
     }
     return current.filter((item) => {
@@ -701,8 +841,9 @@ export class FinanceStore {
     return {
       news: [...this.news.values()].filter((item) => !item.processedAt).map(({ id, title, publishedAt }) => ({ id, title, publishedAt })),
       unclassifiedNews: this.classificationQueue("unclassified").map((item) => {
-        const news = item as NewsItem; return { id: news.id, title: news.title, publishedAt: news.publishedAt };
+        const story = item as NewsStoryClusterView; return { id: story.id, title: story.title, publishedAt: story.primaryNews.publishedAt, primaryNewsId: story.primaryNews.id, sourceCount: story.sourceCount };
       }),
+      storyReviews: this.listNewsStoryClusters().filter((story) => story.status !== "active").map(({ id, title, status, reviewReason }) => ({ id, title, status, reviewReason })),
       classificationReviews: [...this.classificationQueue("unreviewed"), ...this.classificationQueue("needs_revision")]
         .map((item) => ({ id: item.id, newsId: (item as NewsClassification).newsId })),
       operations: [...this.operations.values()].filter((item) => !item.reviewedAt).map(({ id, investmentId, type, effectiveDate }) => ({ id, investmentId, type, effectiveDate })),
@@ -1047,6 +1188,71 @@ function removeQuantity(state: PositionState, quantity: number): { quantity: num
 function hashOperation(input: Record<string, unknown>): string {
   return createHash("sha256").update(canonicalOperationPayload(input)).digest("hex");
 }
+function storyDate(item: NewsItem): string { return item.publishedAt.slice(0, 10); }
+function normalizeStoryUrl(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      const lower = key.toLowerCase();
+      if (lower.startsWith("utm_") || ["gclid", "fbclid", "at_medium", "at_campaign"].includes(lower)) url.searchParams.delete(key);
+    }
+    return url.toString();
+  } catch {
+    return value.trim() || undefined;
+  }
+}
+function semanticKey(item: NewsItem): string {
+  return [...semanticTokens(item)].sort().join(" ");
+}
+function semanticStoryScore(left: NewsItem, right: NewsItem): number {
+  const leftTokens = semanticTokens(left);
+  const rightTokens = semanticTokens(right);
+  if (leftTokens.size < 4 || rightTokens.size < 4) return 0;
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  const jaccard = intersection / union;
+  const entityBoost = sharedEntityCount(left, right) >= 2 ? 0.12 : 0;
+  return Math.min(1, jaccard + entityBoost);
+}
+function semanticTokens(item: NewsItem): Set<string> {
+  const text = `${item.title} ${item.summary ?? ""}`.toLowerCase()
+    .replace(/\bfed\b/g, "federal reserve")
+    .replace(/\b(thwarts?|blocks?|blocked|stops?|prevents?)\b/g, "block")
+    .replace(/\b(oust|ousts|fire|fires|firing|remove|removes|removal)\b/g, "remove")
+    .replace(/\b(bid|attempt|attempts)\b/g, "attempt")
+    .replace(/[^a-z0-9]+/g, " ");
+  const stop = new Set(["the", "a", "an", "to", "of", "for", "and", "or", "in", "on", "at", "by", "with", "from", "as", "is", "are", "was", "were", "be", "here", "now", "s"]);
+  return new Set(text.split(/\s+/).map((token) => token.trim()).filter((token) => token.length > 2 && !stop.has(token)));
+}
+function sharedEntityCount(left: NewsItem, right: NewsItem): number {
+  const entities = (item: NewsItem) => new Set((`${item.title} ${item.summary ?? ""}`.match(/\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*/g) ?? [])
+    .map((entity) => entity.toLowerCase()).filter((entity) => entity.length > 3));
+  const rightEntities = entities(right);
+  return [...entities(left)].filter((entity) => rightEntities.has(entity)).length;
+}
+function primaryMentionScore(item: NewsItem, mention: NewsStoryMention): number {
+  return contentWeight(item) + (mention.matchReason === "canonical_url" ? 5 : 0) + (item.sourceId ? 2 : 0);
+}
+function contentWeight(item: NewsItem): number {
+  return item.title.length + (item.summary?.length ?? 0) * 2 + (item.body?.length ?? 0) * 3;
+}
+function currentClassifications(classifications: NewsClassification[]): NewsClassification[] {
+  const superseded = new Set(classifications.map((item) => item.supersedesClassificationId).filter(Boolean));
+  return classifications.filter((item) => !superseded.has(item.id));
+}
+function classificationConflictFingerprint(classification: NewsClassification): string {
+  return JSON.stringify({
+    importance: classification.importance,
+    scope: classification.scope,
+    horizon: classification.horizon,
+    tags: [...classification.tags].sort(),
+    countries: [...classification.countries].sort(),
+    currencies: [...classification.currencies].sort(),
+    targets: classification.targets.map((target) => `${target.targetType}:${target.targetKey}:${target.direction}:${target.magnitude}`).sort()
+  });
+}
 function clean(value: number): number { return Math.abs(value) < 1e-10 ? 0 : Number(value.toFixed(8)); }
 function nearZero(value: number): boolean { return Math.abs(value) < 1e-8; }
 
@@ -1084,7 +1290,8 @@ export type Allocation = { key: string; quantity: number };
 export type DailyPackage = { date: string; currentPortfolio: PortfolioPosition[]; news: NewsItem[]; recentOperations: Operation[]; pending: PendingWork };
 export type PendingWork = {
   news: Array<Pick<NewsItem, "id" | "title" | "publishedAt">>;
-  unclassifiedNews: Array<Pick<NewsItem, "id" | "title" | "publishedAt">>;
+  unclassifiedNews: Array<{ id: string; title: string; publishedAt: string; primaryNewsId: string; sourceCount: number }>;
+  storyReviews: Array<{ id: string; title: string; status: NewsStoryCluster["status"]; reviewReason?: string }>;
   classificationReviews: Array<{ id: string; newsId: string }>;
   operations: Array<Pick<Operation, "id" | "investmentId" | "type" | "effectiveDate">>;
   snapshots: Array<{ reason: string }>;

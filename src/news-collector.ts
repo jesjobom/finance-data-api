@@ -198,6 +198,7 @@ export class NewsCollectionService {
       const result = await this.adapter(source.adapterType)({ source, state, window, http: this.http, secret });
       const counts = { ...EMPTY_COUNTS(), fetched: result.fetched, rejected: result.rejected, articleFailures: result.articleFailures };
       const filterDiagnostics: string[] = [];
+      const groupedNewsIds: string[] = [];
       let latest = state.latestItemAt;
       for (const candidate of result.candidates) {
         const filterDecision = evaluateCandidateFilters(source, candidate);
@@ -209,12 +210,14 @@ export class NewsCollectionService {
         counts.accepted++;
         const normalized = normalizeCandidate(source, candidate, startedAt);
         const persisted = await this.store.upsertCollectedNews(normalized);
+        groupedNewsIds.push(persisted.item.id);
         if (persisted.result === "created") counts.created++;
         else if (persisted.result === "enriched") counts.enriched++;
         else counts.duplicates++;
         if (!latest || candidate.publishedAt > latest) latest = candidate.publishedAt;
       }
       const completedAt = this.now();
+      const groupingDiagnostics = await this.runStoryGrouping(groupedNewsIds);
       const status = result.notModified ? "no_change" : counts.articleFailures || counts.rejected ? "partial" : "success";
       await this.store.setNewsSourceState(source.id, {
         watermark: window.to, etag: result.etag ?? state.etag, lastModified: result.lastModified ?? state.lastModified,
@@ -223,7 +226,7 @@ export class NewsCollectionService {
         lastErrorCode: undefined
       });
       run = await this.store.updateNewsCollectionRun(run.id, {
-        status, completedAt, counts, diagnostics: [...diagnostics, ...result.diagnostics, ...filterDiagnostics]
+        status, completedAt, counts, diagnostics: [...diagnostics, ...result.diagnostics, ...filterDiagnostics, ...groupingDiagnostics]
       });
       return run;
     } catch (error) {
@@ -248,6 +251,13 @@ export class NewsCollectionService {
     if (type === "rss") return collectRss;
     if (type === "guardian") return collectGuardian;
     throw validation("Source adapter is not enabled", { adapterType: type });
+  }
+
+  private async runStoryGrouping(newsIds: string[]): Promise<string[]> {
+    if (!newsIds.length || typeof this.store.groupNewsItems !== "function") return [];
+    const groups = await this.store.groupNewsItems([...new Set(newsIds)]);
+    const grouped = groups.filter((group: any) => group.sourceCount > 1).length;
+    return grouped ? [`story grouping linked ${grouped} collected item(s) to multi-source clusters`] : [];
   }
 }
 

@@ -46,4 +46,12 @@ describe("accounting migration contract", () => {
       "news_collection_runs_diagnostics_array"
     ]) expect(sql).toContain(fragment);
   });
+
+  it("adds story clusters and mentions for news deduplication", async () => {
+    const sql = await readFile(new URL("../migrations/007_news_story_deduplication.sql", import.meta.url), "utf8");
+    for (const fragment of [
+      "news_story_clusters", "news_story_mentions", "match_reason", "confidence",
+      "classification_source", "idx_news_story_clusters_date", "UNIQUE(news_id)"
+    ]) expect(sql).toContain(fragment);
+  });
 });

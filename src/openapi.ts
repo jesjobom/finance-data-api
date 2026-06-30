@@ -473,6 +473,41 @@ export const openApiDocument: OpenAPIV3.Document = {
           }
         ]
       },
+      NewsStoryClassificationSource: {
+        type: "object",
+        required: ["type"],
+        properties: {
+          type: { type: "string", enum: ["none", "story_cluster", "news_item", "conflict"] },
+          classificationId: { type: "string" },
+          newsId: { type: "string" }
+        }
+      },
+      NewsStoryMention: {
+        type: "object",
+        required: ["id", "storyId", "newsId", "matchReason", "confidence", "isPrimary", "diagnostics", "createdAt", "updatedAt"],
+        properties: {
+          id: { type: "string" }, storyId: { type: "string" }, newsId: { type: "string" }, sourceId: { type: "string" },
+          matchReason: { type: "string", enum: ["canonical_url", "semantic", "manual", "backfill"] },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          isPrimary: { type: "boolean" }, diagnostics: { type: "array", items: { type: "string" } },
+          createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }
+        }
+      },
+      NewsStoryCluster: {
+        type: "object",
+        required: ["id", "publicationDate", "title", "primaryNewsId", "status", "primaryNews", "alsoSeenIn", "mentions", "sourceCount", "classificationSource", "createdAt", "updatedAt"],
+        properties: {
+          id: { type: "string" }, publicationDate: { type: "string", format: "date" }, title: { type: "string" },
+          summary: { type: "string" }, primaryNewsId: { type: "string" }, canonicalUrl: { type: "string", format: "uri" },
+          semanticKey: { type: "string" }, status: { type: "string", enum: ["active", "needs_review", "conflicting_classifications"] },
+          reviewReason: { type: "string" }, primaryNews: ref("NewsItem"),
+          alsoSeenIn: { type: "array", items: ref("NewsItem") },
+          mentions: { type: "array", items: ref("NewsStoryMention") },
+          sourceCount: { type: "integer" },
+          classificationSource: ref("NewsStoryClassificationSource"),
+          createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" }
+        }
+      },
       NewsSourceHealth: {
         type: "object", required: ["status", "consecutiveFailures"],
         properties: {
@@ -964,6 +999,21 @@ export const openApiDocument: OpenAPIV3.Document = {
       get: { security: auth, summary: "Get news", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } },
       patch: { security: auth, summary: "Update news", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("NewsCreate"), responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } }
     },
+    "/v1/news-stories": {
+      get: {
+        security: auth, summary: "List clustered news stories",
+        parameters: [
+          { name: "date", in: "query", schema: { type: "string", format: "date" } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["active", "needs_review", "conflicting_classifications"] } },
+          { name: "unclassified", in: "query", schema: { type: "boolean" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 100 } }
+        ],
+        responses: { "200": collectionResponse("Story clusters", "NewsStoryCluster") }
+      }
+    },
+    "/v1/news-stories/{id}": {
+      get: { security: auth, summary: "Get clustered news story", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": resourceResponse("Story cluster", "NewsStoryCluster"), "404": errorResponse } }
+    },
     "/v1/news/{id}/process": { post: { security: auth, summary: "Mark news processed", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: body("ProcessingUpdate"), responses: { "200": resourceResponse("News item", "NewsItem"), "404": errorResponse } } },
     "/v1/news/{id}/classifications": {
       get: {
@@ -1024,7 +1074,7 @@ export const openApiDocument: OpenAPIV3.Document = {
           { name: "kind", in: "query", required: true, schema: { type: "string", enum: ["unclassified", "unreviewed", "needs_revision"] } },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 100 } }
         ],
-        responses: { "200": jsonResponse("Classification work items", { type: "array", items: { oneOf: [ref("NewsItem"), ref("NewsClassification")] } }), "400": errorResponse }
+        responses: { "200": jsonResponse("Classification work items", { type: "array", items: { oneOf: [ref("NewsStoryCluster"), ref("NewsClassification")] } }), "400": errorResponse }
       }
     },
     "/v1/news-sources": {

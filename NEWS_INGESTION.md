@@ -72,6 +72,25 @@ Call `POST /v1/news-collection-runs` with `{"mode":"due"}` from an external
 cron every 10 to 15 minutes. The service leases each source independently and
 runs sources with bounded concurrency. Start with global concurrency `3`.
 
+After source items are persisted, the scheduled collection agent must treat
+story grouping as a post-ingestion phase:
+
+1. Group exact duplicate coverage by normalized canonical URL.
+2. For remaining same-day items from different sources, run conservative
+   semantic duplicate checks using title, summary/body when available, key
+   entities, event type, and factual outcome.
+3. Preserve every `news_items` record and link duplicates as story mentions;
+   never delete or overwrite a publisher item because it was also seen
+   elsewhere.
+4. Do not mutate an existing story classification only because a new duplicate
+   mention arrived. Record the mention as additional evidence and mark the story
+   for review only when the new mention is materially richer or creates a
+   classification conflict.
+
+Use `GET /v1/news-stories` to inspect clustered stories. Responses include the
+primary mention, bounded `alsoSeenIn` source mentions, grouping provenance, and
+effective classification source.
+
 Operational rollout thresholds:
 
 - source failures do not stop sibling sources;

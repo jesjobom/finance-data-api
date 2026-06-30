@@ -258,6 +258,8 @@ News:
 - `GET /v1/news/{id}`
 - `PATCH /v1/news/{id}`
 - `POST /v1/news/{id}/process`
+- `GET /v1/news-stories`
+- `GET /v1/news-stories/{id}`
 - `GET/POST /v1/news-sources`
 - `GET/PATCH /v1/news-sources/{id}`
 - `GET/POST /v1/news-collection-runs`
@@ -282,6 +284,14 @@ News collection rules:
   summary when available, and tags.
 - `editorialType` distinguishes news, official analysis, research, opinion,
   advocacy, and aggregators; agents must preserve that distinction.
+- After collection persists source records, story grouping runs as a separate
+  post-ingestion phase. It tries normalized canonical URL grouping first, then
+  same-day cross-source semantic grouping with conservative thresholds.
+- Grouping never deletes source records. A clustered story exposes one
+  `primaryNews` mention plus bounded `alsoSeenIn` mentions for other sources.
+- Adding a duplicate mention does not change an existing effective
+  classification by default. New richer evidence or conflicting mention
+  classifications appear as story review work instead.
 
 News classifications:
 
@@ -304,7 +314,8 @@ News classifications:
   `POST /v1/news-classification-targets/{id}/resolutions` without rewriting the
   classifier payload.
 - `GET /v1/news-classification-queue` exposes `unclassified`, `unreviewed`, and
-  `needs_revision` work independently from news `processedAt`.
+  `needs_revision` work independently from news `processedAt`. Unclassified
+  work is story-cluster based, not one row per duplicate source mention.
 - Confidence is bounded from 0 to 1. Use `uncertain` direction and `unknown`
   magnitude instead of inventing precision.
 - Classification requests reject recommendations, trades, price targets,
@@ -372,27 +383,32 @@ For news classification tasks, use this order:
 
 1. Pull work from
    `/v1/news-classification-queue?kind=unclassified&limit=...`.
-2. Read the full news record from `/v1/news/{id}` if the queue response is not
-   enough for classification evidence. Treat `body` as optional: some valid
-   news items only have title, URL, summary, and source metadata because the
-   publisher blocks full-article retrieval.
-3. Submit one classification per `newsId`, `classifierId`, and `externalRunId`.
+2. Treat each unclassified queue item as a story cluster. Use `primaryNews` for
+   the main context and inspect `alsoSeenIn` when another source has a clearer
+   summary/body or important detail.
+3. Read the full news record from `/v1/news/{id}` only when a cluster mention
+   needs more detail than the queue response includes. Treat `body` as optional:
+   some valid news items only have title, URL, summary, and source metadata
+   because the publisher blocks full-article retrieval.
+4. Submit one classification per selected `newsId`, `classifierId`, and
+   `externalRunId`; normally use the cluster primary mention unless a
+   non-primary mention carries the best available evidence.
    Keep `classifierId` stable for the agent or ruleset, and make
    `externalRunId` unique for that specific analysis run.
-4. Store only the inferred classification, confidence, rationale, and evidence
+5. Store only the inferred classification, confidence, rationale, and evidence
    keys that are supported by the available fields. Do not infer facts that
    require missing article text, and do not write recommendations, trades, price
    targets, expected returns, thesis judgments, or portfolio-specific advice.
-5. If the same run is retried after a network failure, send the identical
+6. If the same run is retried after a network failure, send the identical
    payload. A `200` replay is success. A `409` means the run identity was reused
    with different content and must be investigated, not force-rewritten.
-6. To correct an earlier classification, create a new one with
+7. To correct an earlier classification, create a new one with
    `supersedesClassificationId`. Never mutate or hide the earlier inference.
-7. For unresolved companies, submit a `company` target first. Link it to a
+8. For unresolved companies, submit a `company` target first. Link it to a
    known investment later through
    `/v1/news-classification-targets/{targetId}/resolutions` with actor and
    reason.
-8. Review queues are separate from classification queues. Approval means the
+9. Review queues are separate from classification queues. Approval means the
    workflow accepts the inference for use; it does not make the inference a
    factual publisher claim or investment advice.
 

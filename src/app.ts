@@ -128,6 +128,16 @@ export function buildApp(options: { store?: any; config?: AppConfig; newsCollect
     return store.listNews(query);
   });
   app.get("/v1/news/:id", async (request) => store.getNews(idParams.parse(request.params).id));
+  app.get("/v1/news-stories", async (request) => {
+    const query = z.object({
+      date: z.string().date().optional(),
+      status: z.enum(["active", "needs_review", "conflicting_classifications"]).optional(),
+      unclassified: z.coerce.boolean().optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(100)
+    }).parse(request.query);
+    return store.listNewsStoryClusters(query);
+  });
+  app.get("/v1/news-stories/:id", async (request) => store.getNewsStoryCluster(idParams.parse(request.params).id));
   app.patch("/v1/news/:id", async (request) => store.updateNews(idParams.parse(request.params).id, newsPatchSchema.parse(request.body)));
   app.post("/v1/news/:id/process", async (request) => {
     const body = processingSchema.parse(request.body);

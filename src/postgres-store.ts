@@ -5,7 +5,7 @@ import {
   type Benchmark, type BenchmarkObservation, type BrokerageAccount, type ClassificationReview, type ClassificationReviewCreateInput,
   type ClassificationResolutionCreateInput, type ClassificationTargetResolution, type FxRate, type Investment, type NewsClassification,
   type NewsClassificationCreateInput, type NewsItem, type OpeningPosition,
-  type NewsCollectionRun, type NewsSource, type NewsSourceState, type Operation, type Portfolio, type PortfolioSnapshot, type PortfolioStatement, type PriceObservation,
+  type NewsCollectionRun, type NewsSource, type NewsSourceState, type NewsStoryCluster, type NewsStoryMention, type Operation, type Portfolio, type PortfolioSnapshot, type PortfolioStatement, type PriceObservation,
   type Reconciliation, type VirtualPortfolio, type VirtualPosition, type WatchedAsset, newId, nowIso
 } from "./domain.js";
 import { FinanceStore } from "./store.js";
@@ -80,6 +80,23 @@ export class PostgresFinanceStore {
   async classificationQueue(kind: Parameters<FinanceStore["classificationQueue"]>[0], limit?: number) {
     await this.refreshNewsDomain();
     return this.cache.classificationQueue(kind, limit);
+  }
+  async getNewsStoryCluster(id: string) {
+    await this.refreshNewsDomain();
+    return this.cache.getNewsStoryCluster(id);
+  }
+  async listNewsStoryClusters(filters?: Parameters<FinanceStore["listNewsStoryClusters"]>[0]) {
+    await this.refreshNewsDomain();
+    return this.cache.listNewsStoryClusters(filters);
+  }
+  async groupNewsItem(newsId: string) {
+    await this.refreshNewsDomain();
+    const beforeClusterIds = new Set(this.cache.newsStoryClusters.keys());
+    const beforeMentionIds = new Set(this.cache.newsStoryMentions.keys());
+    const view = this.cache.groupNewsItem(newsId);
+    await this.persistStoryGraph([...this.cache.newsStoryClusters.values()].filter((story) => !beforeClusterIds.has(story.id) || story.id === view.id),
+      [...this.cache.newsStoryMentions.values()].filter((mention) => !beforeMentionIds.has(mention.id) || mention.storyId === view.id));
+    return view;
   }
   listWatchedAssets() { return this.cache.listWatchedAssets(); }
   listVirtualPortfolios() { return this.cache.listVirtualPortfolios(); }
@@ -258,6 +275,7 @@ export class PostgresFinanceStore {
          record.duplicateGroup, record.processedAt, record.processedBy, record.processingNotes, record.createdAt, record.updatedAt]);
       for (const investmentId of record.relatedInvestmentIds) await client.query("INSERT INTO news_investments(news_id, investment_id) VALUES($1,$2)", [record.id, investmentId]);
       await client.query("COMMIT");
+      await this.persistStoryGraph([...this.cache.newsStoryClusters.values()], [...this.cache.newsStoryMentions.values()]);
       return record;
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
@@ -356,6 +374,7 @@ export class PostgresFinanceStore {
     const result = this.cache.upsertCollectedNews(input);
     if (result.result === "created") await this.persistNewsRecord(result.item);
     else if (result.result === "enriched") await this.updateNews(result.item.id, result.item);
+    await this.persistStoryGraph([...this.cache.newsStoryClusters.values()], [...this.cache.newsStoryMentions.values()]);
     return result;
   }
   async createNewsClassification(newsId: string, input: NewsClassificationCreateInput):
@@ -385,6 +404,7 @@ export class PostgresFinanceStore {
         [target.id, record.id, target.targetType, target.targetKey, target.investmentId, target.companyName, target.market,
          target.symbol, target.direction, target.magnitude, target.confidence, target.rationale, JSON.stringify(target.evidenceKeys)]);
       await client.query("COMMIT");
+      await this.persistStoryGraph([...this.cache.newsStoryClusters.values()], [...this.cache.newsStoryMentions.values()]);
       return result;
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
@@ -425,7 +445,35 @@ export class PostgresFinanceStore {
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
       [record.id, record.source, record.sourceId, record.externalId, record.url, record.canonicalUrl, record.title, record.summary,
        record.body, record.publishedAt, record.retrievedAt, record.language, record.region, JSON.stringify(record.topicTags), record.rawHash,
-       record.duplicateGroup, record.processedAt, record.processedBy, record.processingNotes, record.createdAt, record.updatedAt]);
+      record.duplicateGroup, record.processedAt, record.processedBy, record.processingNotes, record.createdAt, record.updatedAt]);
+  }
+  private async persistStoryGraph(stories: NewsStoryCluster[], mentions: NewsStoryMention[]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const story of stories) await client.query(
+        `INSERT INTO news_story_clusters(id, publication_date, title, summary, primary_news_id, canonical_url, semantic_key, status,
+         review_reason, classification_source, created_at, updated_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title, summary=EXCLUDED.summary, primary_news_id=EXCLUDED.primary_news_id,
+         canonical_url=EXCLUDED.canonical_url, semantic_key=EXCLUDED.semantic_key, status=EXCLUDED.status,
+         review_reason=EXCLUDED.review_reason, classification_source=EXCLUDED.classification_source, updated_at=EXCLUDED.updated_at`,
+        [story.id, story.publicationDate, story.title, story.summary, story.primaryNewsId, story.canonicalUrl, story.semanticKey,
+         story.status, story.reviewReason, JSON.stringify(story.classificationSource ?? { type: "none" }), story.createdAt, story.updatedAt]);
+      for (const mention of mentions) await client.query(
+        `INSERT INTO news_story_mentions(id, story_id, news_id, source_id, match_reason, confidence, is_primary, diagnostics, created_at, updated_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT(news_id) DO UPDATE SET story_id=EXCLUDED.story_id, source_id=EXCLUDED.source_id, match_reason=EXCLUDED.match_reason,
+         confidence=EXCLUDED.confidence, is_primary=EXCLUDED.is_primary, diagnostics=EXCLUDED.diagnostics, updated_at=EXCLUDED.updated_at`,
+        [mention.id, mention.storyId, mention.newsId, mention.sourceId, mention.matchReason, mention.confidence, mention.isPrimary,
+         JSON.stringify(mention.diagnostics), mention.createdAt, mention.updatedAt]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
   async createWatchedAsset(input: Omit<WatchedAsset, "id" | "createdAt" | "updatedAt">): Promise<WatchedAsset> {
     const record = this.cache.createWatchedAsset(input);
@@ -561,6 +609,8 @@ async function refreshNewsDomain(pool: pg.Pool, cache: FinanceStore): Promise<vo
   let classificationsResult;
   let reviewsResult;
   let resolutionsResult;
+  let storiesResult;
+  let mentionsResult;
   try {
     await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
     linksResult = await client.query("SELECT news_id, investment_id FROM news_investments");
@@ -569,6 +619,8 @@ async function refreshNewsDomain(pool: pg.Pool, cache: FinanceStore): Promise<vo
     classificationsResult = await client.query("SELECT * FROM news_classifications");
     reviewsResult = await client.query("SELECT * FROM news_classification_reviews");
     resolutionsResult = await client.query("SELECT * FROM news_classification_target_resolutions");
+    storiesResult = await client.query("SELECT * FROM news_story_clusters");
+    mentionsResult = await client.query("SELECT * FROM news_story_mentions");
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -600,9 +652,17 @@ async function refreshNewsDomain(pool: pg.Pool, cache: FinanceStore): Promise<vo
   for (const row of reviewsResult.rows) reviews.set(String(row.id), classificationReviewFromRow(row));
   const resolutions = new Map<string, ClassificationTargetResolution>();
   for (const row of resolutionsResult.rows) resolutions.set(String(row.id), classificationResolutionFromRow(row));
+  const stories = new Map<string, NewsStoryCluster>();
+  for (const row of storiesResult.rows) stories.set(String(row.id), newsStoryClusterFromRow(row));
+  const mentions = new Map<string, NewsStoryMention>();
+  for (const row of mentionsResult.rows) mentions.set(String(row.id), newsStoryMentionFromRow(row));
 
   cache.news.clear();
   news.forEach((value, key) => cache.news.set(key, value));
+  cache.newsStoryClusters.clear();
+  stories.forEach((value, key) => cache.newsStoryClusters.set(key, value));
+  cache.newsStoryMentions.clear();
+  mentions.forEach((value, key) => cache.newsStoryMentions.set(key, value));
   cache.newsClassifications.clear();
   classifications.forEach((value, key) => cache.newsClassifications.set(key, value));
   cache.classificationReviews.clear();
@@ -655,6 +715,21 @@ function newsFromRow(row: Row, relatedInvestmentIds: string[]): NewsItem {
     language: optional(row.language), region: optional(row.region), topicTags: jsonArray(row.topic_tags), rawHash: optional(row.raw_hash),
     duplicateGroup: optional(row.duplicate_group), relatedInvestmentIds, processedAt: row.processed_at ? iso(row.processed_at) : undefined,
     processedBy: optional(row.processed_by), processingNotes: optional(row.processing_notes), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  };
+}
+function newsStoryClusterFromRow(row: Row): NewsStoryCluster {
+  return {
+    id: String(row.id), publicationDate: dateOnly(row.publication_date), title: String(row.title),
+    summary: optional(row.summary), primaryNewsId: String(row.primary_news_id), canonicalUrl: optional(row.canonical_url),
+    semanticKey: optional(row.semantic_key), status: row.status as NewsStoryCluster["status"], reviewReason: optional(row.review_reason),
+    classificationSource: jsonValue(row.classification_source, { type: "none" }), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
+  };
+}
+function newsStoryMentionFromRow(row: Row): NewsStoryMention {
+  return {
+    id: String(row.id), storyId: String(row.story_id), newsId: String(row.news_id), sourceId: optional(row.source_id),
+    matchReason: row.match_reason as NewsStoryMention["matchReason"], confidence: Number(row.confidence), isPrimary: Boolean(row.is_primary),
+    diagnostics: jsonArray(row.diagnostics), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
   };
 }
 function newsSourceFromRow(row: Row): NewsSource {

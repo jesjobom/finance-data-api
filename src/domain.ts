@@ -200,6 +200,47 @@ export type NewsItem = {
   updatedAt: string;
 };
 
+export type NewsStoryMatchReason = "canonical_url" | "semantic" | "manual" | "backfill";
+export type NewsStoryStatus = "active" | "needs_review" | "conflicting_classifications";
+export type NewsStoryClassificationSource = {
+  type: "none" | "story_cluster" | "news_item" | "conflict";
+  classificationId?: string;
+  newsId?: string;
+};
+export type NewsStoryCluster = {
+  id: string;
+  publicationDate: string;
+  title: string;
+  summary?: string;
+  primaryNewsId: string;
+  canonicalUrl?: string;
+  semanticKey?: string;
+  status: NewsStoryStatus;
+  reviewReason?: string;
+  classificationSource?: NewsStoryClassificationSource;
+  createdAt: string;
+  updatedAt: string;
+};
+export type NewsStoryMention = {
+  id: string;
+  storyId: string;
+  newsId: string;
+  sourceId?: string;
+  matchReason: NewsStoryMatchReason;
+  confidence: number;
+  isPrimary: boolean;
+  diagnostics: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+export type NewsStoryClusterView = NewsStoryCluster & {
+  primaryNews: NewsItem;
+  alsoSeenIn: NewsItem[];
+  mentions: NewsStoryMention[];
+  sourceCount: number;
+  classificationSource: NewsStoryClassificationSource;
+};
+
 export const newsAdapterTypes = ["rss", "guardian", "alpha_vantage", "gdelt", "commercial"] as const;
 export const editorialTypes = ["news", "official_analysis", "research", "opinion", "advocacy", "aggregator"] as const;
 export const newsSourcePriorities = ["core", "supporting", "optional", "fallback", "paid_core"] as const;
