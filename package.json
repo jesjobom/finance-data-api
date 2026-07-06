@@ -13,12 +13,14 @@
     "test:watch": "vitest",
     "lint": "tsc -p tsconfig.json --noEmit",
     "validate": "npm run typecheck && npm test",
+    "api:ensure": "bash scripts/start-finance-data-api.sh --ensure",
+    "api:env": "bash scripts/start-finance-data-api.sh --ensure --print-env",
     "db:create": "tsx scripts/create-db.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "db:reset": "tsx scripts/reset-db.ts",
     "news": "tsx scripts/news.ts",
-    "news:collect": "tsx scripts/news.ts collect"
+    "news:collect": "bash scripts/news-collect.sh"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

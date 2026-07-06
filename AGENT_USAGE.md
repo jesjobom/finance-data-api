@@ -28,16 +28,26 @@ the API stores and audits those inferences rather than generating them.
 
 ## Base URL And Authentication
 
-Use the production base URL provided by the runtime or deployment environment:
+Use the production base URL provided by the runtime or deployment environment.
+For local OpenClaw scheduled work, first ensure the project is active and export
+the local API token:
 
 ```bash
-BASE_URL="https://finance-data-api.example"
+cd /home/node/.openclaw/jarvis/projects/finance-data-api
+eval "$(npm run --silent api:env)"
+```
+
+Then consume the exported local values:
+
+```bash
+HOST="$FINANCE_DATA_API_HOST"
+BASE_URL="$FINANCE_DATA_API_BASE_URL"
+TOKEN="$FINANCE_DATA_API_TOKEN"
 ```
 
 Protected endpoints require a bearer token:
 
 ```bash
-TOKEN="$FINANCE_DATA_API_TOKEN"
 AUTH_HEADER="Authorization: Bearer $TOKEN"
 ```
 

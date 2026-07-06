@@ -63,6 +63,22 @@ npm run news:collect -- --source bloomberg-economics
 npm run news -- sources
 ```
 
+Ensure the local API process is active and export connection variables for
+agents:
+
+```bash
+npm run api:ensure
+eval "$(npm run --silent api:env)"
+```
+
+This exports `FINANCE_DATA_API_HOST`, `FINANCE_DATA_API_BASE_URL`,
+`FINANCE_DATA_API_TOKEN`, and `API_TOKEN`. The script loads `.env`, checks
+`GET /health`, and starts the API only when the process is not already healthy.
+
+`npm run news:collect` runs the same health check/bootstrap before collecting
+news, so scheduled local collection can recover a stopped API process before
+continuing.
+
 An external cron can call `POST /v1/news-collection-runs` in `due` mode. Every
 collection is hard-limited to the latest 24 hours. A missing or stale watermark
 never causes an older backfill. See [NEWS_INGESTION.md](NEWS_INGESTION.md) for

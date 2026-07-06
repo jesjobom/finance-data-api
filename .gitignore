@@ -4,3 +4,4 @@ dist/
 coverage/
 .vitest/
 npm-debug.log*
+.finance-data-api.*

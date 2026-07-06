@@ -68,9 +68,23 @@ Regex escape-hatch example:
 
 ## Scheduling
 
-Call `POST /v1/news-collection-runs` with `{"mode":"due"}` from an external
-cron every 10 to 15 minutes. The service leases each source independently and
-runs sources with bounded concurrency. Start with global concurrency `3`.
+Before any scheduled collection or source-registration work, verify that the
+local API is active and export its connection variables:
+
+```bash
+eval "$(npm run --silent api:env)"
+```
+
+The startup script loads `.env`, checks `GET /health`, starts the API only when
+it is not already healthy, and exports `FINANCE_DATA_API_HOST`,
+`FINANCE_DATA_API_BASE_URL`, `FINANCE_DATA_API_TOKEN`, and `API_TOKEN` for
+follow-up API calls.
+
+Call `POST /v1/news-collection-runs` with `{"mode":"due"}` from an external cron
+every 10 to 15 minutes, or run `npm run news:collect` for the local CLI path.
+The local `news:collect` command runs the same health check and startup script
+before continuing. The service leases each source independently and runs sources
+with bounded concurrency. Start with global concurrency `3`.
 
 After source items are persisted, the scheduled collection agent must treat
 story grouping as a post-ingestion phase:

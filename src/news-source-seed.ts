@@ -15,6 +15,23 @@ export async function loadNewsSourceSeed(path = new URL("../seeds/news-sources.j
   return parsed;
 }
 
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => stableJson(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stableJson(item)])
+    );
+  }
+  return value;
+}
+
+function stableJsonString(value: unknown): string | undefined {
+  const stable = stableJson(value);
+  return stable === undefined ? undefined : JSON.stringify(stable);
+}
+
 export async function seedNewsSources(
   store: any,
   rows?: Array<Omit<NewsSource, "id" | "createdAt" | "updatedAt">>
@@ -37,7 +54,7 @@ export async function seedNewsSources(
       maxConcurrency: row.maxConcurrency, secretRef: row.secretRef, config: row.config, disabledReason: row.disabledReason
     };
     const same = Object.entries(owned).every(([key, value]) =>
-      JSON.stringify((current as unknown as Record<string, unknown>)[key]) === JSON.stringify(value));
+      stableJsonString((current as unknown as Record<string, unknown>)[key]) === stableJsonString(value));
     if (same) result.unchanged++;
     else {
       await store.updateNewsSource(current.id, owned);

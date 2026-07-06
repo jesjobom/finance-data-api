@@ -373,6 +373,32 @@ describe("news source API and seed", () => {
     expect(store.getNewsSourceState(registered.id).watermark).toBe(NOW);
   });
 
+  it("treats semantically equal JSON config as unchanged when key order differs", async () => {
+    const store = new FinanceStore();
+    const rows = [source({
+      config: {
+        fetchArticleContent: true,
+        candidateFilters: {
+          whitelist: [{ value: "tax", mode: "word", target: "title", reason: "macro" }],
+          blacklist: [{ value: "flight", mode: "word", target: "title", reason: "noise" }]
+        }
+      }
+    })];
+    expect(await seedNewsSources(store, rows)).toMatchObject({ created: 1 });
+    const registered = store.listNewsSources()[0];
+    store.newsSources.set(registered.id, {
+      ...registered,
+      config: JSON.parse(JSON.stringify({
+        candidateFilters: {
+          blacklist: [{ mode: "word", value: "flight", reason: "noise", target: "title" }],
+          whitelist: [{ mode: "word", value: "tax", reason: "macro", target: "title" }]
+        },
+        fetchArticleContent: true
+      }))
+    });
+    expect(await seedNewsSources(store, rows)).toMatchObject({ unchanged: 1, updated: 0 });
+  });
+
   it("validates seed duplicates, endpoints, adapter configuration, and secret references", async () => {
     expect(() => source({ endpoint: "file:///tmp/feed.xml" })).toThrow();
     expect(() => source({ adapterType: "guardian", secretRef: undefined })).toThrow(/secret reference/);
