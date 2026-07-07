@@ -47,6 +47,70 @@ describe("api contract basics", () => {
     expect(get.json().active).toBe(false);
   });
 
+  it("replays imported operations idempotently and rejects conflicting replays", async () => {
+    const ctx = testApp();
+    const investment = await createInvestment(ctx);
+    const payload = {
+      investmentId: investment.id,
+      type: "buy",
+      effectiveDate: "2026-01-01",
+      quantity: 3,
+      price: 100,
+      currency: "USD",
+      importSource: "broker-csv",
+      externalId: "trade-1"
+    };
+
+    const created = await ctx.app.inject({ method: "POST", url: "/v1/operations", headers: ctx.auth, payload });
+    const replayed = await ctx.app.inject({ method: "POST", url: "/v1/operations", headers: ctx.auth, payload });
+    const conflict = await ctx.app.inject({
+      method: "POST",
+      url: "/v1/operations",
+      headers: ctx.auth,
+      payload: { ...payload, quantity: 4 }
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ importResult: "created" });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toMatchObject({ id: created.json().id, importResult: "replayed" });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error.code).toBe("conflict");
+  });
+
+  it("patches news sources partially without dropping required persisted fields", async () => {
+    const ctx = testApp();
+    const created = await ctx.app.inject({
+      method: "POST",
+      url: "/v1/news-sources",
+      headers: ctx.auth,
+      payload: {
+        slug: "daily-wire",
+        name: "Daily Wire",
+        adapterType: "rss",
+        endpoint: "https://news.example.com/feed.xml",
+        enabled: true
+      }
+    });
+
+    const patched = await ctx.app.inject({
+      method: "PATCH",
+      url: `/v1/news-sources/${created.json().id}`,
+      headers: ctx.auth,
+      payload: { enabled: false, disabledReason: "maintenance" }
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json()).toMatchObject({
+      id: created.json().id,
+      slug: "daily-wire",
+      endpoint: "https://news.example.com/feed.xml",
+      enabled: false,
+      disabledReason: "maintenance"
+    });
+  });
+
   it("accepts the documented changes cursor parameter", async () => {
     const ctx = testApp();
     await createInvestment(ctx);

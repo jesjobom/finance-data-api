@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { newsClassificationCreateSchema, type NewsClassificationCreateInput } from "../src/domain.js";
+import {
+  newsClassificationCreateSchema,
+  newsSourceCreateSchema,
+  type NewsClassificationCreateInput
+} from "../src/domain.js";
 import { FinanceStore } from "../src/store.js";
 
 function createNews(store: FinanceStore, title = "Central bank changes rates") {
@@ -48,6 +52,20 @@ function classification(overrides: Record<string, unknown> = {}): NewsClassifica
       rationale: "Direction is unclear.",
       evidenceKeys: ["headline"]
     }],
+    ...overrides
+  });
+}
+
+function source(overrides: Record<string, unknown> = {}) {
+  return newsSourceCreateSchema.parse({
+    slug: "example-source",
+    name: "Example Source",
+    adapterType: "rss",
+    endpoint: "https://news.example.com/feed.xml",
+    enabled: true,
+    priority: "core",
+    editorialType: "news",
+    config: {},
     ...overrides
   });
 }
@@ -178,5 +196,44 @@ describe("store edge cases", () => {
     const trulyUnclassified = createNews(store, "Actually unclassified");
 
     expect(store.classificationQueue("unclassified", 300).map((item: any) => item.primaryNews.id)).toEqual([trulyUnclassified.id]);
+  });
+
+  it("enforces news source leases by owner until expiry", () => {
+    const store = new FinanceStore();
+    const registered = store.createNewsSource(source());
+    const now = "2026-06-21T12:00:00.000Z";
+
+    expect(store.acquireNewsSourceLease(registered.id, "collector-a", now, 60_000)).toBe(true);
+    expect(store.acquireNewsSourceLease(registered.id, "collector-b", "2026-06-21T12:00:30.000Z", 60_000)).toBe(false);
+    expect(store.acquireNewsSourceLease(registered.id, "collector-a", "2026-06-21T12:00:30.000Z", 60_000)).toBe(true);
+
+    store.releaseNewsSourceLease(registered.id, "collector-b");
+    expect(store.getNewsSourceState(registered.id)).toMatchObject({ leaseOwner: "collector-a" });
+
+    expect(store.acquireNewsSourceLease(registered.id, "collector-b", "2026-06-21T12:02:00.000Z", 60_000)).toBe(true);
+    expect(store.getNewsSourceState(registered.id)).toMatchObject({ leaseOwner: "collector-b" });
+  });
+
+  it("classifies news source health across never collected, failing, stale, healthy, and disabled states", () => {
+    const store = new FinanceStore();
+    const registered = store.createNewsSource(source({ staleAfterMinutes: 60 }));
+
+    expect(store.newsSourceHealth(registered.id, "2026-06-21T12:00:00.000Z").status).toBe("never_collected");
+
+    store.setNewsSourceState(registered.id, { consecutiveFailures: 2, lastSuccessAt: "2026-06-21T10:00:00.000Z" });
+    expect(store.newsSourceHealth(registered.id, "2026-06-21T12:00:00.000Z").status).toBe("failing");
+
+    store.setNewsSourceState(registered.id, {
+      consecutiveFailures: 0,
+      lastSuccessAt: "2026-06-21T10:00:00.000Z",
+      latestItemAt: "2026-06-21T10:30:00.000Z"
+    });
+    expect(store.newsSourceHealth(registered.id, "2026-06-21T12:00:00.000Z").status).toBe("stale");
+
+    store.setNewsSourceState(registered.id, { latestItemAt: "2026-06-21T11:30:01.000Z" });
+    expect(store.newsSourceHealth(registered.id, "2026-06-21T12:00:00.000Z").status).toBe("healthy");
+
+    store.updateNewsSource(registered.id, { enabled: false });
+    expect(store.newsSourceHealth(registered.id, "2026-06-21T12:00:00.000Z").status).toBe("disabled");
   });
 });

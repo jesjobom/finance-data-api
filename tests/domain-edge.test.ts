@@ -4,7 +4,9 @@ import {
   canonicalClassificationPayload,
   classificationPayloadHash,
   classificationTargetIdentity,
+  newsCollectionTriggerSchema,
   newsClassificationCreateSchema,
+  newsSourceCreateSchema,
   operationCreateSchema
 } from "../src/domain.js";
 
@@ -140,5 +142,34 @@ describe("domain edge cases", () => {
     expect(classificationTargetIdentity({ targetType: "currency", targetKey: "cad" })).toBe("currency:CAD");
     expect(classificationTargetIdentity({ targetType: "company", companyName: " Apple Inc. ", market: "NASDAQ", symbol: "AAPL" }))
       .toBe("company:apple inc.|NASDAQ|AAPL");
+  });
+
+  it("rejects invalid news source filter regexes and missing required secrets", () => {
+    expect(() => newsSourceCreateSchema.parse({
+      slug: "bad-regex",
+      name: "Bad Regex",
+      adapterType: "rss",
+      endpoint: "https://news.example.com/feed.xml",
+      config: { candidateFilters: { blacklist: [{ value: "[", mode: "regex" }] } }
+    })).toThrow(/Invalid candidate filter regex/);
+
+    expect(() => newsSourceCreateSchema.parse({
+      slug: "guardian",
+      name: "Guardian",
+      adapterType: "guardian",
+      endpoint: "https://content.guardianapis.com/search"
+    })).toThrow(/Guardian source requires a secret reference/);
+  });
+
+  it("guards news collection trigger edge cases", () => {
+    expect(() => newsCollectionTriggerSchema.parse({ mode: "selected" })).toThrow(/Selected mode requires sourceIds/);
+    expect(() => newsCollectionTriggerSchema.parse({
+      from: "2026-06-20T00:00:00.000Z",
+      to: "2026-06-21T00:00:01.000Z"
+    })).toThrow(/24 hours/);
+    expect(() => newsCollectionTriggerSchema.parse({
+      from: "2026-06-21T00:00:00.000Z",
+      to: "2026-06-20T23:59:59.000Z"
+    })).toThrow(/from must not be after to/);
   });
 });
